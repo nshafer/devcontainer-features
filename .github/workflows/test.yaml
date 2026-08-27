@@ -1,0 +1,36 @@
+name: Test features
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+    paths: ['src/**', 'test/**']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        feature: [claude, git-config, persist-homedir]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the devcontainer CLI
+        run: npm install -g @devcontainers/cli
+
+      # The claude feature bind-mounts ~/.claude/settings.json, and a bind mount whose source is
+      # missing stops the container from starting outright — Docker does not create it. A runner
+      # has neither the directory nor the file.
+      - name: Create host config paths
+        run: |
+          mkdir -p ~/.claude ~/.config/git
+          printf '{"theme":"dark","model":"opus"}\n' > ~/.claude/settings.json
+          git config -f ~/.config/git/config user.name "CI"
+          printf 'ci-canary-pattern\n' > ~/.config/git/ignore
+
+      - name: Test ${{ matrix.feature }}
+        # -i/-u matter: these features key off the remote user's home, so the default
+        # ubuntu:focal-as-root image would not exercise anything realistic.
+        run: devcontainer features test --features ${{ matrix.feature }} -i node -u node --skip-scenarios .

@@ -1,0 +1,34 @@
+name: Release features
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['src/**']
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # Publishes any feature whose version in devcontainer-feature.json is not already in the
+      # registry, and regenerates each feature's README from its metadata.
+      - uses: devcontainers/action@v1
+        with:
+          publish-features: 'true'
+          base-path-to-features: './src'
+          generate-docs: 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit regenerated docs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add src/*/README.md || true
+          git diff --staged --quiet || git commit -m "Regenerate feature docs"
+          git push || true

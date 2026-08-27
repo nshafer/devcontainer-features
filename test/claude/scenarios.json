@@ -1,0 +1,11 @@
+{
+  "seeded_settings": {
+    "image": "node",
+    "remoteUser": "node",
+    "features": {
+      "claude": {
+        "settings": "{'includeCoAuthoredBy': false, 'cleanupPeriodDays': 45}"
+      }
+    }
+  }
+}

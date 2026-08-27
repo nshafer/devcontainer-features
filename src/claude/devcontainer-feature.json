@@ -1,0 +1,36 @@
+{
+  "id": "claude",
+  "version": "1.0.0",
+  "name": "Claude Code (nshafer)",
+  "description": "Installs the Claude Code CLI with the native installer, and can seed ~/.claude/settings.json at build time. Nothing from the host's ~/.claude is mounted: credentials, transcripts and file history stay on the host, and each container logs in for itself.",
+  "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/claude",
+  "options": {
+    "version": {
+      "type": "string",
+      "default": "stable",
+      "proposals": [
+        "stable",
+        "latest"
+      ],
+      "description": "Version to install: 'stable', 'latest', or an exact X.Y.Z."
+    },
+    "settings": {
+      "type": "string",
+      "default": "",
+      "description": "JSON object written to ~/.claude/settings.json at build time, written with single quotes: {'includeCoAuthoredBy': false}. Double quotes do not survive the devcontainer CLI's option quoting. Empty writes nothing; the CLI owns the file from its first run.",
+      "proposals": [
+        "{'includeCoAuthoredBy': false}"
+      ]
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code"
+      ]
+    }
+  },
+  "installsAfter": [
+    "ghcr.io/devcontainers/features/common-utils"
+  ]
+}
