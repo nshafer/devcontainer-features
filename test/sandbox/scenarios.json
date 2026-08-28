@@ -1,0 +1,26 @@
+{
+  "channels_off": {
+    "image": "mcr.microsoft.com/devcontainers/base:debian",
+    "remoteUser": "vscode",
+    "features": {
+      "sandbox": {
+        "blockSshAgent": false,
+        "blockGpgAgent": false,
+        "blockX11": false,
+        "blockVscodeIpc": false,
+        "scrubEnv": false,
+        "sweepInterval": "5"
+      }
+    }
+  },
+  "wayland_bind_mount": {
+    "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+    "remoteUser": "node",
+    "capAdd": [
+      "SYS_ADMIN"
+    ],
+    "features": {
+      "sandbox": {}
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "id": "sandbox",
+  "version": "1.0.0",
+  "name": "Sandbox (nshafer)",
+  "description": "Cuts the host sockets VS Code forwards into a dev container - SSH agent, GPG agent, X11 and the VS Code IPC channels - so a coding agent running inside cannot sign with your keys, spend your GitHub token or reach your desktop.",
+  "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/sandbox",
+  "options": {
+    "blockSshAgent": {
+      "type": "boolean",
+      "default": true,
+      "description": "Block the forwarded SSH agent (/tmp/vscode-ssh-auth-*.sock). Your host SSH keys stop being usable from inside, so git over SSH stops working there."
+    },
+    "blockGpgAgent": {
+      "type": "boolean",
+      "default": true,
+      "description": "Block the forwarded GPG agent (~/.gnupg/S.gpg-agent), by making ~/.gnupg itself root-owned and unwritable. Signed commits stop working inside the container."
+    },
+    "blockX11": {
+      "type": "boolean",
+      "default": true,
+      "description": "Block the forwarded display (/tmp/.X11-unix), by making that directory root-owned and unwritable so no X socket can be created in it. GUI apps stop reaching your desktop. Wayland cannot be blocked from inside - see the README."
+    },
+    "blockVscodeIpc": {
+      "type": "boolean",
+      "default": true,
+      "description": "Block the VS Code IPC channels: vscode-ipc-* (the 'code' CLI), vscode-git-* (the git credential helper, which hands out the host's GitHub token) and vscode-remote-containers-ipc-* (the extension's own channel). Breaks 'code .' from the terminal and VS Code's git authentication."
+    },
+    "scrubEnv": {
+      "type": "boolean",
+      "default": true,
+      "description": "Also unset the variables that advertise these sockets (SSH_AUTH_SOCK, DISPLAY, GIT_ASKPASS, BROWSER, VSCODE_IPC_HOOK_CLI, REMOTE_CONTAINERS_*) in every shell. Cosmetic next to the socket blocks - VS Code re-injects them - but it stops tools finding the paths by accident."
+    },
+    "sweepInterval": {
+      "type": "string",
+      "default": "1",
+      "proposals": [
+        "1",
+        "5"
+      ],
+      "description": "Seconds between sweeps by the root daemon. Each sweep is one find over /tmp and /run."
+    }
+  },
+  "entrypoint": "/usr/local/share/nshafer-sandbox/entrypoint.sh",
+  "postStartCommand": "/usr/local/share/nshafer-sandbox/post-start.sh",
+  "postAttachCommand": "/usr/local/share/nshafer-sandbox/post-attach.sh",
+  "containerEnv": {
+    "BASH_ENV": "/usr/local/share/nshafer-sandbox/scrub-env.sh"
+  },
+  "installsAfter": [
+    "ghcr.io/devcontainers/features/common-utils"
+  ]
+}

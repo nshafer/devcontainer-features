@@ -9,6 +9,7 @@ copy-pasted into every project's `devcontainer.json`.
 | [`claude`](src/claude)                   | Installs the Claude Code CLI and copies the host's `~/.claude/settings.json` into the container.  |
 | [`git-config`](src/git-config)           | Copies the host's git config and excludes file into the container.                                |
 | [`persist-homedir`](src/persist-homedir) | Keeps `/home` on a per-project named volume across rebuilds, minus the VS Code server/extensions. |
+| [`sandbox`](src/sandbox)                 | Cuts the host sockets VS Code forwards in — SSH agent, GPG agent, X11, VS Code IPC.                |
 | [`tidewave`](src/tidewave)               | Installs the Tidewave CLI and starts it on every container start.                                 |
 
 ## Use them everywhere
@@ -26,6 +27,11 @@ project's `devcontainer.json` mentioning them:
 
 `tidewave` is deliberately not in that list. It needs a published port, and a feature cannot
 declare one — see its notes below — so it belongs in the projects that actually want it.
+
+`sandbox` is not in it either, for the opposite reason: it works everywhere, but it is supposed to
+break things. Signing commits, `git push` over SSH, `code .` from the container terminal and GUI
+apps on your desktop all stop working inside any container that has it. That is the trade it
+exists to make, and it belongs in the containers running an agent rather than in all of them.
 
 Two things to know about that setting: it is contributed by the Dev Containers VS Code extension, so the
 standalone `devcontainer` CLI ignores it — containers created with `devcontainer up` need the
@@ -146,6 +152,108 @@ projects whose folders have the same basename will share one.
 The remote user's home must be under `/home` for the volume to cover it. `install.sh` warns when it
 is not, and carries on — the `~/.vscode-server` redirect still works either way.
 
+### sandbox
+
+VS Code's Dev Containers extension forwards a set of host sockets into every container it starts,
+and each one is a capability an agent running in there inherits. Measured from a live container,
+not assumed — the extension writes the list into `REMOTE_CONTAINERS_SOCKETS` itself:
+
+| Channel | Path | What it grants |
+| --- | --- | --- |
+| SSH agent | `/tmp/vscode-ssh-auth-<uuid>.sock` | signing with your host SSH keys |
+| GPG agent | `~/.gnupg/S.gpg-agent` | signing with your host GPG keys |
+| X11 | `/tmp/.X11-unix/X<n>` | your desktop: keystrokes, screenshots |
+| git credentials | `$XDG_RUNTIME_DIR/vscode-git-<id>.sock` | your GitHub token, via `GIT_ASKPASS` |
+| `code` CLI | `vscode-ipc-<uuid>.sock` | driving your editor |
+| extension IPC | `vscode-remote-containers-ipc-<uuid>.sock` | the extension's own channel to the host |
+| Wayland | `/tmp/vscode-wayland-<uuid>.sock` | your desktop — **a bind mount**, see below |
+
+The feature closes them with three mechanisms, in descending order of how much they are worth.
+
+**Sealing beats deleting.** The obvious move is to delete the sockets, but deleting frees the path
+and VS Code puts a working one back — which is why approaches built on `find -delete` need a
+background loop re-deleting every 30 seconds. This takes the socket instead, `chown root:root` plus
+`chmod 000`, and that closes three doors at once:
+
+| | after `rm` | after sealing |
+| --- | --- | --- |
+| agent connects | recreated, works | `EACCES` |
+| agent deletes it | n/a | `EPERM` — `/tmp` is sticky and the file is root's |
+| VS Code recreates it | yes | `EADDRINUSE` |
+
+**Two paths need no sweeping at all.** `/tmp/.X11-unix` and `~/.gnupg` have fixed names, so the
+feature takes the *directories* at build time — root-owned, mode `0555`. A socket cannot be created
+in a directory the creator cannot write, so there is no window between creation and sweep because
+there is no creation. It is the directory rather than the socket file inside it because the owner of
+a directory can unlink anything in it whatever that thing is owned by: a root-owned tombstone in a
+user-owned `~/.gnupg` is removable, a root-owned `~/.gnupg` is not. Both are re-asserted at every
+container start, since a volume mounted over either one hides whatever the image did.
+
+**The rest needs a daemon, not a bounded loop.** The remaining names carry a fresh UUID per window,
+so every VS Code window you attach forwards a whole new set — hours after the first. A loop that
+runs ten passes and stops has stopped covering you. The feature's `entrypoint` runs as root before
+VS Code has attached and leaves a sweeper behind for the life of the container.
+
+Some things worth knowing:
+
+**Wayland cannot be blocked from inside, and must not be attempted.** It is not a socket VS Code
+creates in the container — it is a bind mount of the host's `/run/user/<uid>/wayland-0`. It cannot be
+removed (`EBUSY`) or unmounted (no `CAP_SYS_ADMIN`), and **permission changes on a bind mount are
+written through to the source**, so sealing it would set mode `000` on the socket your own desktop
+session is running on. Every mutation in the feature is gated on a `/proc/self/mountinfo` check for
+exactly this reason, and `test/sandbox/wayland_bind_mount.sh` demonstrates the write-through
+happening and then proves the guard stops it. The only real fix is host-side, in VS Code's user
+settings:
+
+```jsonc
+"dev.containers.mountWaylandSocket": false
+```
+
+**Depth 3, not 2.** `XDG_RUNTIME_DIR` in a dev container is `/tmp/user/<uid>`, and the git
+credential socket — the one that hands out your GitHub token — lives there. A sweep two levels deep
+looks thorough and silently leaves it open.
+
+**The manifest is reported on, never acted on.** `REMOTE_CONTAINERS_SOCKETS` is the authoritative
+list of what was forwarded, so a channel these globs do not know about still gets surfaced. It is
+checked by the unprivileged `postStart`/`postAttach` hooks rather than swept by root, for two
+reasons: root cannot read another user's `/proc/<pid>/environ` without `CAP_SYS_PTRACE`, which
+Docker does not grant — and a feature that granted it would hand the remote user the ability to
+ptrace the very daemon doing the hardening. Nor should root `chmod 000` paths named by something the
+remote user controls; that turns the feature into a denial-of-service primitive against
+`/etc/passwd`. So a new channel gets you a warning, not silence, and not an exploit.
+
+**The env scrub is the weakest layer and is not a control.** VS Code re-injects `SSH_AUTH_SOCK`,
+`GIT_ASKPASS` and friends into everything it starts, and any program can read a path back out of
+`/proc`. The sockets being unusable is the control. The scrub is wired in at `/etc/profile.d`,
+`/etc/bash.bashrc`, `/etc/zsh/zshenv` and `BASH_ENV` — all in `/etc`, never in `$HOME`, because
+`persist-homedir` puts `/home` on a volume that masks whatever the image wrote to `~/.bashrc`, so a
+scrub installed there works exactly once and then quietly stops.
+
+Check the result at any time — it exits non-zero if anything is still reachable:
+
+```console
+$ sandbox-report
+sandbox: forwarded host channels in this container
+  ssh agent        blocked
+  gpg agent        blocked
+  x11 display      blocked
+  vscode ipc       blocked
+  sweeper          running, every 1s
+```
+
+**`no-new-privileges` is not part of the feature**, though it pairs well with it. A feature's
+`securityOpt` is static metadata and cannot be made conditional on an option, so shipping it would
+force it on every container and break `sudo` everywhere. It is one line in `devcontainer.json` when
+you want it — and note that `capDrop` has no equivalent at all, feature or otherwise:
+
+```jsonc
+"securityOpt": ["no-new-privileges"]
+```
+
+Finally, the feature is only as good as the container's user model: **it does nothing if
+`remoteUser` is root**, since root can simply `chmod` any tombstone back. `install.sh` says so
+loudly when it detects that.
+
 ### tidewave
 
 Runs the [Tidewave](https://tidewave.ai) CLI inside the container so the Tidewave app on the host
@@ -226,6 +334,22 @@ to ghcr.io.
 ## Tests
 
 ```bash
+make            # what is available
+make sandbox    # one feature
+make test       # all of them, as CI runs them
+```
+
+The `Makefile` exists because every run needs the same three things set correctly — the right CLI,
+a base image the feature can actually be exercised on, and the host paths its mounts expect — and
+none of them are the default. `QUICK=1` skips scenarios for an edit-run loop, `FILTER=<name>`
+narrows to one scenario, `ARGS=` passes anything else through. `make lint` checks shell syntax and
+JSON without starting a container.
+
+One trap it removes: on a machine with VS Code installed, the `devcontainer` on `PATH` is a wrapper
+that appends `--workspace-folder`, which `features test` rejects outright. The Makefile calls the
+npm CLI through `npx` instead. The underlying command is:
+
+```bash
 npx @devcontainers/cli features test -f claude -i node -u node .
 ```
 
@@ -234,8 +358,19 @@ remote user's home directory, and the harness's default (`ubuntu:focal`, running
 none of the interesting paths. The host paths from the one-time setup above have to exist, since
 the harness applies each feature's mounts.
 
+`sandbox` is the exception to `-i node`: its tests have to become root to check what the *remote
+user* can no longer reach, and the plain `node` image has no `sudo`. CI gives it a devcontainers
+base for that reason, and so should you:
+
+```bash
+npx @devcontainers/cli features test -f sandbox \
+    -i mcr.microsoft.com/devcontainers/javascript-node:20 -u node .
+```
+
 Those two flags apply to the autogenerated test only. Each feature's `test/<feature>/scenarios.json`
-names its own image, which is how `tidewave` gets tested on Alpine at all. Add `--skip-scenarios`
+names its own image, which is how `tidewave` gets tested on Alpine at all — and how `sandbox` gets a
+container with `CAP_SYS_ADMIN`, the only way to build a real bind mount and prove the guard that
+keeps it from writing through to the host. Add `--skip-scenarios`
 for a faster edit-run loop; CI does not, because a scenario is where every non-default option is
 covered.
 
