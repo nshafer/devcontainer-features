@@ -38,6 +38,8 @@ jobs:
           - { feature: persist-homedir, image: node, user: node }
           - { feature: tidewave,        image: node, user: node }
           - { feature: sandbox,         image: 'mcr.microsoft.com/devcontainers/javascript-node:20', user: node }
+          # egress-filter needs iptables and a proxy, so it wants a full base image too.
+          - { feature: egress-filter,   image: 'mcr.microsoft.com/devcontainers/javascript-node:20', user: node }
     steps:
       - uses: actions/checkout@v7
 
@@ -49,10 +51,13 @@ jobs:
       # has neither the directory nor the file.
       - name: Create host config paths
         run: |
-          mkdir -p ~/.claude ~/.config/git
+          mkdir -p ~/.claude ~/.config/git ~/.config/egress-filter
           printf '{"theme":"dark","model":"opus"}\n' > ~/.claude/settings.json
           git config -f ~/.config/git/config user.name "CI"
           printf 'ci-canary-pattern\n' > ~/.config/git/ignore
+          # The global egress allowlist. Left almost empty on purpose: the tests allow what they
+          # need at runtime, so they do not depend on this file's contents.
+          printf '# global egress allowlist (CI)\n' > ~/.config/egress-filter/allowlist.txt
 
       - name: Test ${{ matrix.feature }}
         # -i/-u matter: these features key off the remote user's home, so the default

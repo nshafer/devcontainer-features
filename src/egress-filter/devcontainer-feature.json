@@ -1,0 +1,54 @@
+{
+  "id": "egress-filter",
+  "version": "1.0.0",
+  "name": "Egress filter (nshafer)",
+  "description": "Default-deny outbound networking, with a hostname allowlist merged from a global list on the host, a per-project list in the repo, and a baseline that keeps VS Code working. Enforced by an in-container firewall, so an agent that ignores HTTP_PROXY simply cannot connect.",
+  "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/egress-filter",
+  "options": {
+    "allow": {
+      "type": "string",
+      "default": "",
+      "description": "Extra hostnames to allow, comma separated, on top of the lists. A leading dot means the domain and its subdomains: '.github.com,pypi.org'."
+    },
+    "deny": {
+      "type": "string",
+      "default": "",
+      "description": "Hostnames to remove from the merged allowlist, comma separated. Applied last, so it overrides the global, project and baseline lists."
+    },
+    "baseline": {
+      "type": "boolean",
+      "default": true,
+      "description": "Include the built-in baseline that keeps VS Code itself working - the marketplace, extension CDNs and update hosts. Without it the server cannot install extensions, and attaching may hang."
+    },
+    "projectAllowlist": {
+      "type": "string",
+      "default": "/workspaces/*/.devcontainer/egress-allow.txt",
+      "description": "Where the per-project list lives inside the container. A glob, because a feature's entrypoint is not told the workspace folder. Read once at container start and never re-read - it lives in the repo, where the container's own user can write it. See the README."
+    },
+    "allowDns": {
+      "type": "boolean",
+      "default": true,
+      "description": "Let the container resolve names directly. Turning this off closes a slow exfiltration channel but breaks anything that resolves for itself - git, package managers, most clients. See the README."
+    },
+    "proxyPort": {
+      "type": "string",
+      "default": "3128",
+      "description": "Loopback port the filtering proxy listens on."
+    }
+  },
+  "mounts": [
+    {
+      "source": "${localEnv:HOME}/.config/egress-filter",
+      "target": "/mnt/egress-filter,readonly",
+      "type": "bind"
+    }
+  ],
+  "capAdd": [
+    "NET_ADMIN"
+  ],
+  "entrypoint": "/usr/local/share/nshafer-egress-filter/entrypoint.sh",
+  "postAttachCommand": "/usr/local/share/nshafer-egress-filter/post-attach.sh",
+  "installsAfter": [
+    "ghcr.io/devcontainers/features/common-utils"
+  ]
+}

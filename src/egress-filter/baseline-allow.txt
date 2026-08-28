@@ -1,0 +1,14 @@
+# Baseline allowlist: what VS Code itself needs to attach and install extensions.
+#
+# Without these the server comes up but cannot reach the marketplace, and extension installs fail
+# partway through attaching -- the failure looks like a hang, not an error. Turn it off with
+# "baseline": false only if you are listing these yourself.
+
+.visualstudio.com
+.vsassets.io
+.gallerycdn.vsassets.io
+update.code.visualstudio.com
+.vscode-cdn.net
+vscode.download.prss.microsoft.com
+.vo.msecnd.net
+marketplace.visualstudio.com

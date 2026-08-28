@@ -1,0 +1,15 @@
+{
+  "strict": {
+    "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+    "remoteUser": "node",
+    "features": {
+      "egress-filter": {
+        "baseline": false,
+        "allow": "example.com,.iana.org",
+        "deny": ".iana.org",
+        "allowDns": false,
+        "proxyPort": "8888"
+      }
+    }
+  }
+}

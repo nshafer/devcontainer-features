@@ -6,11 +6,176 @@ copy-pasted into every project's `devcontainer.json`.
 
 | Feature                                  | What it does                                                                                      |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| [`claude`](src/claude)                   | Installs the Claude Code CLI and copies the host's `~/.claude/settings.json` into the container.  |
-| [`git-config`](src/git-config)           | Copies the host's git config and excludes file into the container.                                |
 | [`persist-homedir`](src/persist-homedir) | Keeps `/home` on a per-project named volume across rebuilds, minus the VS Code server/extensions. |
+| [`git-config`](src/git-config)           | Copies the host's git config and excludes file into the container.                                |
 | [`sandbox`](src/sandbox)                 | Seals the host sockets VS Code forwards in — SSH agent, GPG agent, X11, VS Code IPC.               |
+| [`egress-filter`](src/egress-filter)     | Default-deny outbound networking with a hostname allowlist, enforced in-container.                 |
+| [`claude`](src/claude)                   | Installs the Claude Code CLI and copies the host's `~/.claude/settings.json` into the container.  |
 | [`tidewave`](src/tidewave)               | Installs the Tidewave CLI and starts it on every container start.                                 |
+
+## Use per-project
+
+Name them in the project's own `.devcontainer/devcontainer.json`. This is the form that works
+everywhere: the standalone `devcontainer` CLI reads the config and nothing else, so a container
+created by `devcontainer up` — on your machine or in CI — gets none of the VS Code defaults below.
+
+```jsonc
+{
+  "name": "my-project",
+  "build": { "dockerfile": "Dockerfile" },
+  "remoteUser": "devc",
+  "features": {
+    // Optional. Every feature here declares installsAfter common-utils, so if you use it, it runs
+    // first and they see the user it created. Give it the same username the container runs as.
+    "ghcr.io/devcontainers/features/common-utils:2": { "username": "devc" },
+
+    "ghcr.io/nshafer/devcontainer-features/claude:1": {},
+    "ghcr.io/nshafer/devcontainer-features/git-config:1": {},
+    "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {},
+    "ghcr.io/nshafer/devcontainer-features/sandbox:1": {}
+  }
+}
+```
+
+`{}` takes every default, and the defaults are the intended configuration — spelled out, they are:
+
+```jsonc
+"features": {
+  "ghcr.io/nshafer/devcontainer-features/claude:1": {
+    "version": "stable",          // or "latest", or an exact X.Y.Z
+    "settings": ""                // "{'includeCoAuthoredBy': false}" — single quotes, see below
+  },
+
+  // No options at all.
+  "ghcr.io/nshafer/devcontainer-features/git-config:1": {},
+  "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {},
+
+  "ghcr.io/nshafer/devcontainer-features/sandbox:1": {
+    "blockSshAgent": true,
+    "blockGpgAgent": true,
+    "blockX11": true,
+    "blockVscodeIpc": true,
+    "dropSudo": true,             // turning this off makes the rest decorative
+    "scrubEnv": true,
+    "sweepInterval": "1"          // seconds; only the backstop, sealing is inotify-driven
+  },
+
+  "ghcr.io/nshafer/devcontainer-features/tidewave:1": {
+    "version": "latest",          // or an exact X.Y.Z matching a tidewave_app release tag
+    "port": "9000",
+    "allowRemoteAccess": true,    // nothing reaches the CLI without it
+    "autostart": true
+  }
+},
+
+// tidewave only, and not optional: a feature cannot open a port or read the host's home path.
+"appPort": ["127.0.0.1:9000:9000"],
+"remoteEnv": { "TIDEWAVE_HOST_PATH": "${localEnv:TIDEWAVE_HOST_PATH}" }
+```
+
+Two things to do before the first build. Run the [one-time host setup](#one-time-host-setup) —
+`claude` and `git-config` bind-mount host paths, and a missing source stops the container starting.
+And decide about `sandbox` deliberately: it is the one feature here that takes things away, `sudo`
+included, and everything under [its notes](#sandbox) applies to everyone who builds this config.
+
+`:1` is a major-version tag, resolved to the newest `1.x` at build time. `devcontainer up` writes
+the digest it resolved into a `devcontainer-lock.json` beside the config; commit that to hold every
+machine to the same feature build, and `devcontainer upgrade` to move it forward.
+
+## Use with local overrides
+
+A committed `devcontainer.json` describes the project, and your agent setup is not the project —
+nobody else working on the repo asked to have their `sudo` removed. VS Code's user setting below
+solves that for containers VS Code starts, but the CLI ignores it, so a `devcontainer up` container
+gets a bare project again. The way out is two configs: the committed one, and a gitignored copy
+beside it that adds these features.
+
+```
+.devcontainer/
+├── devcontainer.json          # committed — the project, no personal features
+├── devcontainer-lock.json     # committed
+├── Dockerfile                 # committed, shared by both configs
+└── local/                     # gitignored
+    ├── devcontainer.json      # yours — the same thing plus these features
+    └── devcontainer-lock.json
+```
+
+The repo's `.gitignore`:
+
+```gitignore
+# Per-developer local files.
+local/
+*.local
+*.local.*
+```
+
+`local/devcontainer.json` is the committed config with the features added:
+
+```jsonc
+{
+  "name": "my-project",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": ".."
+  },
+  "remoteUser": "devc",
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": { "username": "devc" },
+    "ghcr.io/nshafer/devcontainer-features/sandbox:1": {},
+    "ghcr.io/nshafer/devcontainer-features/claude:1": {},
+    "ghcr.io/nshafer/devcontainer-features/git-config:1": {},
+    "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {}
+  },
+  "postCreateCommand": "go mod download"
+}
+```
+
+**Two paths have to climb a directory.** Paths in a `devcontainer.json` are relative to that file,
+not to `.devcontainer/`, so a config one level deeper needs `"dockerfile": "../Dockerfile"` — and
+an explicit `"context": ".."`, because the build context defaults to the directory holding the
+config. Leave the context out and the build runs inside `local/`, where the Dockerfile can `COPY`
+nothing from the repo.
+
+**It is a copy, not an overlay.** There is no inheritance between configs in the spec: the CLI reads
+exactly one, so whatever the committed config gains later has to be copied across by hand. That is
+the cost of the arrangement, and the reason to keep the divergence to the `features` block.
+
+The lock file follows the config it belongs to, so `local/devcontainer-lock.json` is gitignored with
+the rest and pinning your feature digests never shows up in the project's diff.
+
+### Pointing things at it
+
+Nothing discovers that file on its own — every command needs `--config`:
+
+```bash
+devcontainer open --config .devcontainer/local/devcontainer.json
+devcontainer up   --config .devcontainer/local/devcontainer.json
+devcontainer exec --config .devcontainer/local/devcontainer.json bash
+```
+
+`--workspace-folder` defaults to the current directory, so run them from the repo root and there is
+nothing else to pass. (`devcontainer open` belongs to the CLI the Dev Containers extension installs
+with the "Dev Containers: Install devcontainer CLI" command and puts on `PATH`, not to the npm `@devcontainers/cli`.) VS Code finds the file too — it looks one
+level down for `.devcontainer/*/devcontainer.json` and offers a picker when there is more than one —
+but `open --config` names the one you want without the prompt.
+
+That is enough repetition to be worth aliasing. From `~/.bash_aliases`:
+
+```bash
+alias devc="devcontainer"
+alias dco="devcontainer open"
+alias dcol="devcontainer open --config .devcontainer/local/devcontainer.json"
+alias dcu="devcontainer up"
+alias dcul="devcontainer up --config .devcontainer/local/devcontainer.json"
+alias dce="devcontainer exec"
+alias dcel="devcontainer exec --config .devcontainer/local/devcontainer.json"
+alias dcb="devcontainer exec bash"
+alias dcbl="devcontainer exec --config .devcontainer/local/devcontainer.json bash"
+```
+
+The trailing `l` is "local", and the pairs are the point: `dcu`/`dcul` build the project as everyone
+else gets it or as you want it, `dcb`/`dcbl` drop into a shell in either, `dco`/`dcol` open one in
+VS Code. Being one letter apart is what keeps the local config from being the one you forget.
 
 ## Use them everywhere
 
@@ -45,8 +210,8 @@ source does not exist stops the container from starting**. Docker does not creat
 behaviour, not `--mount`. So on every machine that uses these features:
 
 ```bash
-mkdir -p ~/.claude ~/.config/git
-touch ~/.claude/settings.json
+mkdir -p ~/.claude ~/.config/git ~/.config/egress-filter
+touch ~/.claude/settings.json ~/.config/egress-filter/allowlist.txt
 ```
 
 `claude` mounts that one file rather than the directory around it, so the file itself has to exist.
@@ -97,6 +262,97 @@ Expect the CLI to normalise what it finds: `'model': 'opus'` becomes `"opus[1m]"
 
 A persisted home volume with existing content masks the image's copy, so a container whose volume
 predates a settings change will not see it until that volume is recreated.
+
+### egress-filter
+
+Default-deny outbound networking, decided by hostname. Two halves that work together:
+
+- **The firewall is the control.** `iptables` rejects everything outbound except loopback,
+  established connections, DNS, and traffic owned by one dedicated uid — the proxy's. Nothing the
+  agent runs is that uid, so there is no route off the machine that does not go through the proxy.
+  `HTTP_PROXY` is set as a convenience; a tool that ignores it gets `REJECT`, not a bypass.
+- **The proxy is the policy.** It filters on the hostname in the `CONNECT` request, so lists are
+  domains rather than addresses — **no TLS interception and no CA to install.**
+
+That split is what makes the lists pleasant: changing one is a proxy reload (`SIGHUP`), never a
+firewall change, so nothing is briefly open while you edit.
+
+**Three sources, merged in order** — baseline, then global, then project, then the feature's own
+`allow`. Later sources only add; `deny` is applied last and only removes:
+
+| source | where | for |
+| --- | --- | --- |
+| baseline | built in, `baseline: false` to drop | what VS Code needs to attach and install extensions |
+| global | `~/.config/egress-filter/allowlist.txt` on the host, mounted read-only | every container on this machine |
+| project | `.devcontainer/egress-allow.txt` in the repo | this project |
+| option | `allow` / `deny` in `devcontainer.json` | this container |
+
+A bare name means that host; a leading dot means the domain and its subdomains; anything that
+already looks like a regex is passed through.
+
+**Only the global list is re-read while the container runs, and that asymmetry is the point.** It is
+a read-only mount of a file on your machine, so nothing inside the container can write it — the only
+party who can change it is you, at the keyboard, and a root loop applies the change within two
+seconds. The project list lives in the repo, which the container's own user *can* write, so it is
+read exactly once at container start. Widening it needs a restart: a human action, against a file in
+git, visible in a diff.
+
+There is deliberately **no command for adding a host from inside the container**. Anything the
+container's user could run to widen the allowlist would be a way for the agent to widen it too,
+which is the thing this feature exists to prevent. `egress-status` shows what is enforced and where
+it came from, and only reads.
+
+**A blocked request explains itself, because otherwise it does not.** Measured, the failure an agent
+actually sees is a bare 403 with no mention of a filter — `curl: (56) CONNECT tunnel failed,
+response 403` — and npm goes further and blames your dependency versions. An agent seeing that will
+reasonably retry, switch registries, or start turning off certificate verification, none of which
+can work and the last of which is harmful. So three things carry the explanation:
+
+- the proxy's 403 page names the feature, the refused host and the remedy (plain HTTP, and anything
+  that surfaces the body — npm included)
+- `/usr/local/share/nshafer-egress-filter/BLOCKED.md` says the same at length, tool-agnostically,
+  and is pointed at from the postAttach output
+- the same text is installed as a Claude skill at `~/.claude/skills/egress-filter/SKILL.md`, written
+  at *container start* rather than build time, because `persist-homedir` masks anything the image
+  leaves in `$HOME`
+
+Skills are **model-invoked**, not commands: Claude sees every skill's `name` and `description` at all
+times and loads the body when it judges one relevant. So the description is the whole trigger, and it
+is written against the *symptoms* an agent will be staring at — `403`, `CONNECT tunnel failed`, an
+npm error about permissions — rather than the cause, which it has no way to see. Anthropic's own
+`skill-creator` notes that Claude tends to *under*-trigger skills and advises making descriptions
+"pushy", so this one is explicitly directive: read this **before** retrying, switching registry, or
+disabling certificate verification. It is discretionary even so, which is why the 403 page and
+`BLOCKED.md` carry the same information for the times it does not fire, and for agents that are not
+Claude.
+
+For HTTPS the client only ever sees the status code, so the instructions have to arrive before the
+failure — which is what the skill is for. All of it is instructions and no capability: the agent
+still cannot widen anything, and the notes say so explicitly, including that editing the project
+list itself will not take effect.
+
+Things worth knowing:
+
+**The baseline exists because a default-deny network can hang the attach.** The VS Code server
+installs extensions from inside the container and runs as the same uid as the agent, so uid rules
+cannot separate them — cut the marketplace off and you get a container that never finishes
+configuring. Turn `baseline` off only if you are
+listing those hosts yourself.
+
+**DNS is allowed by default and is a side channel.** Names still resolve, so an agent can encode
+data into queries. `allowDns: false` closes it — the proxy resolves server-side, so allowed hosts
+keep working — at the cost of anything that resolves for itself: git, package managers, most
+clients.
+
+**Only HTTP and HTTPS get out.** Anything else — `git+ssh`, arbitrary TCP — is rejected outright.
+Correct for a default-deny posture, surprising the first time.
+
+**It depends on `sandbox`'s `dropSudo`.** A remote user with sudo runs `iptables -F` and the whole
+thing is gone. The two features are meant to be used together.
+
+**`NET_ADMIN` is unconditional**, because `capAdd` is static metadata like everything else here.
+That is why this is a separate feature rather than an option on `sandbox`: only projects that ask
+for egress filtering get the capability.
 
 ### git-config
 

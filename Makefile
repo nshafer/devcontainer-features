@@ -32,6 +32,7 @@ USER_DEFAULT  := node
 # *remote user* can no longer reach, and the plain node image ships no sudo. Keep this in step with
 # the matrix in .github/workflows/test.yaml.
 IMAGE_sandbox := mcr.microsoft.com/devcontainers/javascript-node:20
+IMAGE_egress-filter := mcr.microsoft.com/devcontainers/javascript-node:20
 
 # IMAGE=/USER= on the command line beat the per-feature value, which beats the default.
 image_for = $(if $(IMAGE),$(IMAGE),$(if $(IMAGE_$(1)),$(IMAGE_$(1)),$(IMAGE_DEFAULT)))
@@ -108,9 +109,12 @@ scenarios:
 # there. Deliberately does not touch ~/.gitconfig: if that file exists, git ignores ~/.config/git
 # entirely, so creating an empty one would switch off the whole configuration of an XDG setup.
 setup:
-	@mkdir -p $(HOME)/.claude $(HOME)/.config/git
+	@mkdir -p $(HOME)/.claude $(HOME)/.config/git $(HOME)/.config/egress-filter
 	@[ -e $(HOME)/.claude/settings.json ] || echo '{}' > $(HOME)/.claude/settings.json
 	@[ -e $(HOME)/.config/git/config ] || : > $(HOME)/.config/git/config
+	@[ -e $(HOME)/.config/egress-filter/allowlist.txt ] \
+	    || printf '# Hosts every dev container may reach. .example.com covers subdomains.\n' \
+	       > $(HOME)/.config/egress-filter/allowlist.txt
 
 # The test scripts are linted with three checks off, and all three are structural rather than
 # sloppiness -- suppressing them per-line would mean a directive on nearly every check in the suite:

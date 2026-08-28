@@ -1,0 +1,57 @@
+# A request was blocked by egress-filter
+
+This container has default-deny outbound networking. Everything is refused except hosts on an
+allowlist, and the refusal happens at the firewall, so it is not something the failing tool can be
+configured around.
+
+## Recognizing it
+
+The error is almost always a bare 403 from the proxy, and most tools describe it badly:
+
+| tool | what you see |
+| --- | --- |
+| `curl` (https) | `curl: (56) CONNECT tunnel failed, response 403` |
+| `curl` (http) | an HTML page titled *Blocked by egress-filter* |
+| `git` | `fatal: unable to access '...': CONNECT tunnel failed, response 403` |
+| `npm` | `npm error 403 ... Filtered`, followed by advice about forbidden package versions |
+
+npm's message is misleading: it is not a version problem, a registry problem, or a credentials
+problem. If a request fails with 403 and you did not expect an authorisation error, run
+`egress-status` before doing anything else.
+
+## What will not work
+
+There is deliberately no command in this container that adds a host to the allowlist. If there
+were, anything running in here could widen its own network access, which is the thing this feature
+exists to prevent. Specifically, none of these will help:
+
+- retrying, or waiting and retrying
+- a different mirror, registry, proxy or CDN
+- `npm config set strict-ssl false`, `GIT_SSL_NO_VERIFY`, `curl -k` — the block is not a TLS
+  failure, and turning off certificate checking makes things worse for no gain
+- editing `.devcontainer/egress-allow.txt` yourself — it is read once at container start and is not
+  re-read while the container runs, so this changes nothing until someone restarts it
+
+## What to do instead
+
+Ask the person you are working with to allow the host, and tell them which one and why. There are
+two lists, and the difference matters:
+
+| list | where | scope | takes effect |
+| --- | --- | --- | --- |
+| global | `~/.config/egress-filter/allowlist.txt` **on their machine** | every container | within ~2s, no restart |
+| project | `.devcontainer/egress-allow.txt` **in this repo** | this project | after a container restart |
+
+A bare name allows that host exactly (`example.com`). A leading dot allows the domain and its
+subdomains (`.github.com`). One per line.
+
+A good request names the host, the tool, and what you were trying to do:
+
+> I need `registry.npmjs.org` allowed to install dependencies — `npm ci` is failing with a 403 from
+> the egress filter. Adding `registry.npmjs.org` to `~/.config/egress-filter/allowlist.txt` applies
+> immediately; putting it in `.devcontainer/egress-allow.txt` needs a container restart.
+
+## Checking what is allowed
+
+`egress-status` prints the active policy and every file it was merged from. It only reads, so it is
+always safe to run.
