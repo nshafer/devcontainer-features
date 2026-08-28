@@ -163,6 +163,7 @@ not assumed — the extension writes the list into `REMOTE_CONTAINERS_SOCKETS` i
 | SSH agent | `/tmp/vscode-ssh-auth-<uuid>.sock` | signing with your host SSH keys |
 | GPG agent | `~/.gnupg/S.gpg-agent` | signing with your host GPG keys |
 | X11 | `/tmp/.X11-unix/X<n>` | your desktop: keystrokes, screenshots |
+| GPG keyboxd | `~/.gnupg/S.keyboxd` | your keyring |
 | git credentials | `$XDG_RUNTIME_DIR/vscode-git-<id>.sock` | your GitHub token, via `GIT_ASKPASS` |
 | `code` CLI | `vscode-ipc-<uuid>.sock` | driving your editor |
 | extension IPC | `vscode-remote-containers-ipc-<uuid>.sock` | the extension's own channel to the host |
@@ -181,13 +182,21 @@ background loop re-deleting every 30 seconds. This takes the socket instead, `ch
 | agent deletes it | n/a | `EPERM` — `/tmp` is sticky and the file is root's |
 | VS Code recreates it | yes | `EADDRINUSE` |
 
-**Two paths need no sweeping at all.** `/tmp/.X11-unix` and `~/.gnupg` have fixed names, so the
-feature takes the *directories* at build time — root-owned, mode `0555`. A socket cannot be created
-in a directory the creator cannot write, so there is no window between creation and sweep because
-there is no creation. It is the directory rather than the socket file inside it because the owner of
-a directory can unlink anything in it whatever that thing is owned by: a root-owned tombstone in a
-user-owned `~/.gnupg` is removable, a root-owned `~/.gnupg` is not. Both are re-asserted at every
-container start, since a volume mounted over either one hides whatever the image did.
+**Everything is sealed after the fact, never pre-empted.** The obvious refinement is to take the
+directories these sockets live in — `/tmp/.X11-unix` and `~/.gnupg` root-owned and unwritable — so
+the socket can never be created at all. That is a stronger boundary, it works, and it makes the
+container impossible to open: VS Code's helper creates those sockets while attaching, fails, and
+dies, leaving **"Configuring Dev Container" on screen forever** with no error and no timeout. So the
+forwarding is allowed to succeed and the channel is taken a moment later. Blocking that starts a
+second late beats blocking that never lets you open the editor. `1.0.0` had it the other way round;
+`1.0.1` does not, and `test/sandbox/test.sh` now checks that the directories stay writable before it
+checks anything else.
+
+The cost is stated rather than hidden: with the directory writable, a tombstone inside it can be
+unlinked by the user who owns that directory, so the fixed-name channels — X11 and GPG — are open
+for at most one sweep interval rather than never. The UUID-named channels keep the stronger
+guarantee, because `/tmp` is sticky and a root-owned file in it cannot be removed by the user at
+all.
 
 **The rest needs a daemon, not a bounded loop.** The remaining names carry a fresh UUID per window,
 so every VS Code window you attach forwards a whole new set — hours after the first. A loop that

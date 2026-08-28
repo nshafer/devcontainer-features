@@ -87,54 +87,43 @@ tombstone() {
     return 0
 }
 
-# The two paths that need no daemon at all, because they are not random. A directory the remote
-# user owns is a directory the remote user can have a socket created in; taking the directory
-# instead means the forwarded socket cannot be created in the first place. There is no window
-# between creation and sweep, because there is no creation.
+# The fixed-name channels: /tmp/.X11-unix/X<n> and ~/.gnupg/S.gpg-agent.
 #
-# Re-run at every container start rather than only at build time. Build-time state lives in the
-# image, and the image is masked wherever the path is a volume -- persist-homedir puts /home on
-# one, so a home directory carried over from an older container arrives with whatever it had.
+# An earlier version of this took the *directories* instead -- root-owned, mode 0555 -- so the
+# socket could never be created in the first place. That is a stronger boundary and it cannot be
+# used, because it breaks the container outright. VS Code's own helper creates these sockets while
+# it is attaching, and a directory it cannot write makes that step fail:
+#
+#   Start: Run in container: mkdir -p '/tmp/.X11-unix'
+#   X11 forwarding: DISPLAY in container (:0) forwarded to local host (:0).
+#   ...
+#   Port forwarding ... stderr: Remote close
+#
+# The helper dies, the connection closes, and VS Code sits on "Configuring Dev Container" forever.
+# There is no timeout and no error shown to the user. So the socket has to be allowed to appear and
+# then be taken, rather than being pre-empted: the forwarding gets set up, the channel is sealed a
+# moment later, and the attach completes. Blocking that starts a second too late beats blocking
+# that never lets you open the editor.
+#
+# The cost is honest: because the directory stays writable by the remote user, a tombstone in it
+# can be unlinked -- the owner of a directory may remove anything inside it. The sweeper puts it
+# straight back, so the channel is open for at most one sweep interval rather than never. The
+# UUID-named channels below keep the stronger guarantee, because /tmp is sticky and root's file in
+# it cannot be removed by the user at all.
 block_fixed() {
     if [ "$BLOCK_X11" = true ]; then
-        if is_mount "$X11_DIR"; then
-            warn "$X11_DIR is mounted from the host; cannot seal it from in here"
-        else
-            mkdir -p "$X11_DIR" 2>/dev/null
-            # Sockets already inside survive a chmod of the directory, so clear them out first.
-            for sock in "$X11_DIR"/X*; do
-                [ -e "$sock" ] && tombstone "$sock" "display socket"
-            done
-            if chown root:root "$X11_DIR" 2>/dev/null && chmod 0555 "$X11_DIR" 2>/dev/null; then
-                log "sealed display directory $X11_DIR (root:root 0555)"
-            fi
-        fi
+        for sock in "$X11_DIR"/X*; do
+            [ -e "$sock" ] && tombstone "$sock" "display socket"
+        done
     fi
 
-    # Same trick, and here is why it is the directory rather than just the S.gpg-agent file: the
-    # owner of a directory may unlink anything inside it however that thing is owned, and ~/.gnupg
-    # belongs to the remote user. A root-owned tombstone in a user-owned directory is removable; a
-    # root-owned directory is not. gpg inside the container stops working, which is the ask.
     if [ "$BLOCK_GPG" = true ]; then
-        if is_mount "$GNUPG_DIR"; then
-            warn "$GNUPG_DIR is mounted from the host; cannot seal it from in here"
-        elif [ ! -d "$(dirname "$GNUPG_DIR")" ]; then
-            # mkdir -p would create the home directory itself, owned by root, and a remote user who
-            # cannot write their own $HOME is a broken container. Wait for a start where it exists.
-            warn "$(dirname "$GNUPG_DIR") does not exist yet; leaving the gpg block to a later start"
-        else
-            mkdir -p "$GNUPG_DIR" 2>/dev/null
-            chmod 0700 "$GNUPG_DIR" 2>/dev/null
-            [ -e "$GNUPG_DIR/S.gpg-agent" ] && tombstone "$GNUPG_DIR/S.gpg-agent" "gpg agent socket"
-            # Placed as well as sealed: the forwarder finds the path taken rather than free.
-            [ -e "$GNUPG_DIR/S.gpg-agent" ] || : > "$GNUPG_DIR/S.gpg-agent" 2>/dev/null
-            chown root:root "$GNUPG_DIR/S.gpg-agent" 2>/dev/null
-            chmod 000 "$GNUPG_DIR/S.gpg-agent" 2>/dev/null
-            if chown root:root "$GNUPG_DIR" 2>/dev/null && chmod 0555 "$GNUPG_DIR" 2>/dev/null; then
-                log "sealed gpg directory $GNUPG_DIR (root:root 0555)"
-            fi
-        fi
+        [ -e "$GNUPG_DIR/S.gpg-agent" ] && tombstone "$GNUPG_DIR/S.gpg-agent" "gpg agent socket"
+        [ -e "$GNUPG_DIR/S.gpg-agent.extra" ] && tombstone "$GNUPG_DIR/S.gpg-agent.extra" "gpg agent socket"
+        [ -e "$GNUPG_DIR/S.keyboxd" ] && tombstone "$GNUPG_DIR/S.keyboxd" "gpg keyboxd socket"
     fi
+
+    return 0
 }
 
 # Every forwarded socket path whose name carries a UUID, and so cannot be pre-empted the way the
@@ -171,6 +160,9 @@ sweep_globs() {
 
 sweep() {
     sweep_globs
+    # The fixed-name sockets are re-created by every attach, so they are swept on every pass too,
+    # not merely once at container start.
+    block_fixed
 }
 
 # The globs above are guesses that happen to be right today. This is the authoritative list: the

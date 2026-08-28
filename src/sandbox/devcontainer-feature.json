@@ -1,6 +1,6 @@
 {
   "id": "sandbox",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "name": "Sandbox (nshafer)",
   "description": "Cuts the host sockets VS Code forwards into a dev container - SSH agent, GPG agent, X11 and the VS Code IPC channels - so a coding agent running inside cannot sign with your keys, spend your GitHub token or reach your desktop.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/sandbox",
@@ -13,12 +13,12 @@
     "blockGpgAgent": {
       "type": "boolean",
       "default": true,
-      "description": "Block the forwarded GPG agent (~/.gnupg/S.gpg-agent), by making ~/.gnupg itself root-owned and unwritable. Signed commits stop working inside the container."
+      "description": "Block the forwarded GPG agent (~/.gnupg/S.gpg-agent, .extra and S.keyboxd), by sealing the sockets just after VS Code creates them. Signed commits stop working inside the container."
     },
     "blockX11": {
       "type": "boolean",
       "default": true,
-      "description": "Block the forwarded display (/tmp/.X11-unix), by making that directory root-owned and unwritable so no X socket can be created in it. GUI apps stop reaching your desktop. Wayland cannot be blocked from inside - see the README."
+      "description": "Block the forwarded display (/tmp/.X11-unix/X*). The socket is sealed just after VS Code creates it, not pre-empted -- pre-empting it stops the container attaching at all. GUI apps stop reaching your desktop. Wayland cannot be blocked from inside - see the README."
     },
     "blockVscodeIpc": {
       "type": "boolean",

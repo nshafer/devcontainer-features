@@ -2,11 +2,12 @@
 # Build-time half: stash the scripts, bake the options into a config the runtime can read, wire the
 # environment scrub into the shells, and take the two fixed paths before anyone else can.
 #
-# Very little of the actual blocking happens here, because almost none of it can: the sockets this
-# feature exists to cut are created when VS Code attaches, which is long after the image is built.
-# What the build *can* do is claim the paths whose names are known in advance -- /tmp/.X11-unix and
-# ~/.gnupg -- so they are already root-owned and unwritable the first time the forwarder looks at
-# them. The rest is left to the entrypoint and the sweeper.
+# None of the actual blocking happens here, and that is deliberate rather than a limitation. The
+# sockets this feature exists to cut are created when VS Code attaches, long after the image is
+# built -- and an earlier version that claimed their directories in advance, so they could never be
+# created, made the container impossible to attach to: VS Code's helper failed to set up forwarding
+# and sat on "Configuring Dev Container" forever. See the note above block_fixed in sandbox.sh.
+# Everything is therefore left to the entrypoint and the sweeper, which act after the fact.
 set -euo pipefail
 
 BLOCK_SSH="${BLOCKSSHAGENT:-true}"
@@ -96,10 +97,5 @@ EOF
     done
     echo "==> sandbox: env scrub wired into profile.d, bash.bashrc, zshenv and BASH_ENV"
 fi
-
-# Take the fixed paths now. The entrypoint re-asserts both at every container start, because a
-# volume mounted over either one would hide what the image did here -- but doing it at build time
-# too means a container whose entrypoint never runs still starts out with them closed.
-"$SHARE_DIR/sandbox.sh" block-fixed || true
 
 echo "==> sandbox: build stage done"

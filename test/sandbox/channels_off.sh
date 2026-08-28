@@ -22,21 +22,20 @@ check "the options reached the config" bash -c '
     [ "$BLOCK_IPC" = false ]  || { echo "ipc: $BLOCK_IPC"; exit 1; }
     [ "$SWEEP_INTERVAL" = 5 ] || { echo "interval: $SWEEP_INTERVAL"; exit 1; }'
 
-check "the display directory was left to the user" bash -c '
-    if [ -e /tmp/.X11-unix ]; then
-        ls -ld /tmp/.X11-unix
-        [ "$(stat -c %a /tmp/.X11-unix)" != 555 ] || { echo "sealed despite blockX11=false"; exit 1; }
-    else
-        echo "not created at all, which is also correct"
-    fi
-    sock-bind /tmp/.X11-unix/X9 2>/dev/null || mkdir -p /tmp/.X11-unix && sock-bind /tmp/.X11-unix/X9'
+check "a display socket is not touched" bash -c '
+    mkdir -p /tmp/.X11-unix
+    sock-bind /tmp/.X11-unix/X9
+    sudo /usr/local/share/nshafer-sandbox/sandbox.sh sweep
+    ls -l /tmp/.X11-unix/X9
+    [ "$(stat -c %a /tmp/.X11-unix/X9)" != 0 ] || { echo "sealed despite blockX11=false"; exit 1; }'
 
-check "the gpg directory was left alone" bash -c '
-    ! test -e "$HOME/.gnupg/S.gpg-agent"
-    if [ -e "$HOME/.gnupg" ]; then
-        [ "$(stat -c %U "$HOME/.gnupg")" != root ] || { echo "sealed despite blockGpgAgent=false"; exit 1; }
-    fi
-    echo "gpg untouched"'
+check "a gpg agent socket is not touched" bash -c '
+    mkdir -p -m 700 "$HOME/.gnupg"
+    sock-bind "$HOME/.gnupg/S.gpg-agent"
+    sudo /usr/local/share/nshafer-sandbox/sandbox.sh sweep
+    ls -l "$HOME/.gnupg/S.gpg-agent"
+    [ "$(stat -c %a "$HOME/.gnupg/S.gpg-agent")" != 0 ] \
+        || { echo "sealed despite blockGpgAgent=false"; exit 1; }'
 
 check "a forwarded ssh socket is not touched" bash -c '
     sock-bind /tmp/vscode-ssh-auth-off.sock

@@ -88,30 +88,53 @@ check "defaults were baked in" bash -c '
     [ "$USERNAME" = "$(whoami)" ] || { echo "user: $USERNAME vs $(whoami)"; exit 1; }'
 
 # ---------------------------------------------------------------------------------------------
-# The fixed blocks. Structural rather than swept: the directory is root-owned and unwritable, so
-# the forwarded socket cannot be created in the first place. No race, no daemon needed.
+# The fixed-name channels, and the regression test for the bug that made this feature unusable.
+#
+# Version 1.0.0 pre-empted these by making /tmp/.X11-unix and ~/.gnupg root-owned and unwritable,
+# so the socket could never be created. That is a stronger boundary, and it stopped VS Code
+# attaching at all: the extension's helper creates these sockets while connecting, could not, and
+# died -- leaving "Configuring Dev Container" on screen indefinitely with no error and no timeout.
+#
+# So the first thing checked here is not that the channel is blocked. It is that VS Code can still
+# do the thing it needs to do.
 # ---------------------------------------------------------------------------------------------
 
-check "the display directory is sealed" bash -c '
-    ls -ld /tmp/.X11-unix
-    [ "$(stat -c %U /tmp/.X11-unix)" = root ] || { echo "owner: $(stat -c %U /tmp/.X11-unix)"; exit 1; }
-    [ "$(stat -c %a /tmp/.X11-unix)" = 555 ]  || { echo "mode: $(stat -c %a /tmp/.X11-unix)"; exit 1; }'
+check "the display directory stays writable, so VS Code can set up forwarding" bash -c '
+    # Exactly what the extension does, from its own log:
+    #   Start: Run in container: mkdir -p '"'"'/tmp/.X11-unix'"'"'
+    #   X11 forwarding: DISPLAY in container (:0) forwarded to local host (:0).
+    mkdir -p /tmp/.X11-unix || { echo "mkdir refused"; exit 1; }
+    sock-bind /tmp/.X11-unix/X0 || { echo "REGRESSION: the display socket cannot be created."; \
+        echo "  This is what made 1.0.0 hang on Configuring Dev Container."; exit 1; }'
 
-# The seal proven from the user side, which is the only side that matters.
-check "the user cannot create an X socket" bash -c '
-    ! sock-bind /tmp/.X11-unix/X0 2>&1 | tee /dev/stderr | grep -qi "bound"
-    sock-bind /tmp/.X11-unix/X0 2>&1 | grep -qi "permission denied"'
+check "the gpg directory stays writable, so VS Code can set up forwarding" bash -c '
+    mkdir -p -m 700 "$HOME/.gnupg" || { echo "mkdir refused"; exit 1; }
+    sock-bind "$HOME/.gnupg/S.gpg-agent" || { echo "REGRESSION: the gpg socket cannot be created"; exit 1; }
+    sock-bind "$HOME/.gnupg/S.keyboxd"   || { echo "REGRESSION: the keyboxd socket cannot be created"; exit 1; }'
 
-check "the gpg directory is sealed" bash -c '
-    ls -ld "$HOME/.gnupg"
-    [ "$(stat -c %U "$HOME/.gnupg")" = root ] || { echo "owner: $(stat -c %U "$HOME/.gnupg")"; exit 1; }
-    [ "$(stat -c %a "$HOME/.gnupg")" = 555 ]  || { echo "mode: $(stat -c %a "$HOME/.gnupg")"; exit 1; }'
+# Having let them be created, the sweeper takes them. This is the blocking, one sweep late.
+check "the display socket is sealed once it exists" bash -c '
+    for _ in $(seq 1 20); do
+        [ "$(stat -c %a /tmp/.X11-unix/X0 2>/dev/null)" = 0 ] && break
+        sleep 1
+    done
+    ls -l /tmp/.X11-unix/X0
+    [ "$(stat -c %a /tmp/.X11-unix/X0)" = 0 ] || { echo "never sealed"; exit 1; }'
 
-check "the user cannot replace the gpg agent socket" bash -c '
-    test -e "$HOME/.gnupg/S.gpg-agent"
-    rm -f "$HOME/.gnupg/S.gpg-agent" 2>&1 | tee /dev/stderr | grep -qi "permission denied"
-    test -e "$HOME/.gnupg/S.gpg-agent"
-    ! sock-bind "$HOME/.gnupg/S.gpg-agent" 2>&1 | grep -q bound'
+check "the gpg sockets are sealed once they exist" bash -c '
+    for _ in $(seq 1 20); do
+        [ "$(stat -c %a "$HOME/.gnupg/S.gpg-agent" 2>/dev/null)" = 0 ] \
+            && [ "$(stat -c %a "$HOME/.gnupg/S.keyboxd" 2>/dev/null)" = 0 ] && break
+        sleep 1
+    done
+    ls -l "$HOME/.gnupg/"
+    [ "$(stat -c %a "$HOME/.gnupg/S.gpg-agent")" = 0 ] || { echo "S.gpg-agent never sealed"; exit 1; }
+    [ "$(stat -c %a "$HOME/.gnupg/S.keyboxd")" = 0 ]   || { echo "S.keyboxd never sealed"; exit 1; }'
+
+check "the sealed display socket is unreachable" bash -c '
+    out=$(sock-connect /tmp/.X11-unix/X0 2>&1) && { echo "CONNECTED: $out"; exit 1; }
+    echo "$out"
+    echo "$out" | grep -qi "permission denied"'
 
 # ---------------------------------------------------------------------------------------------
 # Tombstoning, the reason this feature seals rather than deletes. Three separate properties, each
@@ -245,21 +268,11 @@ check "unrelated sockets are left alone" bash -c '
 # which gives this a real mount to aim at without needing CAP_SYS_ADMIN to create one.
 # ---------------------------------------------------------------------------------------------
 
-check "/etc/hosts is genuinely a bind mount here" bash -c '
-    awk "\$5 == \"/etc/hosts\"" /proc/self/mountinfo | tee /dev/stderr | grep -q /etc/hosts'
-
-check "a bind-mounted directory is refused, not sealed" bash -c '
-    # The workspace folder is a bind mount in this harness, which makes it a safe stand-in for a
-    # host-mounted /tmp/.X11-unix: real mount, and modifying it would write back to the host.
-    dir=$(awk "\$5 ~ /^\/workspaces/ { print \$5; exit }" /proc/self/mountinfo)
-    [ -n "$dir" ] || { echo "no bind-mounted directory available to test with"; exit 1; }
-    echo "using $dir"
-    before=$(stat -c %a:%U "$dir")
-    out=$(sudo env SANDBOX_X11_DIR="$dir" /usr/local/share/nshafer-sandbox/sandbox.sh block-fixed 2>&1)
-    echo "$out"
-    echo "$out" | grep -q "mounted from the host" || { echo "no warning issued"; exit 1; }
-    after=$(stat -c %a:%U "$dir")
-    [ "$before" = "$after" ] || { echo "$before -> $after: a bind mount was modified"; exit 1; }'
+# The directory-level mount guard that used to be checked here is gone with the directory sealing
+# it protected: nothing touches /tmp/.X11-unix or ~/.gnupg themselves any more. The guard in
+# tombstone() is what remains and it still matters -- a forwarded Wayland socket is a bind mount --
+# so it is covered above with a synthetic mount table, and against a real one in the
+# wayland_bind_mount scenario.
 
 # ---------------------------------------------------------------------------------------------
 # The daemon. This is what covers a second VS Code window attaching hours later with a fresh UUID,
