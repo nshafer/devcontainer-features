@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
-# The single most dangerous thing this feature could get wrong.
+# The single most dangerous thing this feature could get wrong, tested against the real kernel.
 #
 # VS Code forwards the host's Wayland socket by *bind-mounting* /run/user/<uid>/wayland-0 into the
 # container. A bind mount is not a copy: permission changes made to the mount point are written
 # straight through to the source. So a sweeper that treats it like any other socket and chmod 000s
 # it does not block a channel -- it sets mode 000 on the socket the user's own desktop session is
-# running on, outside the container, and takes down their session.
+# running on, outside the container, and takes that session down.
 #
-# This scenario reproduces that exact shape. SYS_ADMIN is granted to the *test container* only, so
-# it can create a real bind mount; the feature itself never asks for the capability.
+# Creating a bind mount needs two things, and the scenario asks for both: CAP_SYS_ADMIN, and an
+# unconfined AppArmor profile, because the docker-default profile denies the mount syscall whatever
+# capabilities are held. Where a host grants neither -- a locked-down CI runner, a rootless daemon,
+# SELinux in enforcing mode -- this degrades to a stated skip rather than a failure, because the
+# guard itself is covered without privileges in test.sh, by driving it with a synthetic mount table.
+# What is skipped here is only the confirmation that the kernel behaves the way those tests assume.
 set -e
 source dev-container-features-test-lib
 
@@ -26,14 +30,42 @@ sudo chmod 0755 /usr/local/bin/sock-bind
 sock-bind /tmp/pretend-host-wayland.sock
 sudo mkdir -p /tmp/fake-x11
 sudo touch /tmp/fake-x11/X0
-sudo mount --bind /tmp/pretend-host-wayland.sock /tmp/fake-x11/X0
+
+CAN_MOUNT=yes
+if ! sudo mount --bind /tmp/pretend-host-wayland.sock /tmp/fake-x11/X0 2>/tmp/mount-error; then
+    CAN_MOUNT=no
+fi
+
+if [ "$CAN_MOUNT" = no ]; then
+    echo "=================================================================================="
+    echo "SKIPPING the real-bind-mount checks: this host will not let the container mount."
+    sed 's/^/  /' /tmp/mount-error
+    echo ""
+    echo "  Needs CAP_SYS_ADMIN *and* apparmor=unconfined; the scenario asks for both, so one"
+    echo "  of them was refused by the host rather than by the container config."
+    echo ""
+    echo "  The guard this would confirm is still tested, without privileges, in test.sh:"
+    echo "    - 'a socket listed as a mount is refused by the sweep, not sealed'"
+    echo "    - 'the same socket is sealed when it is not a mount'"
+    echo "    - 'a bind-mounted directory is refused, not sealed'  (uses a real Docker mount)"
+    echo "=================================================================================="
+
+    # Not left empty: a scenario that asserts nothing should still say the feature is installed,
+    # or a broken build would show up here as a pass.
+    check "the feature is installed even though the mount checks were skipped" bash -c '
+        test -x /usr/local/share/nshafer-sandbox/sandbox.sh
+        sandbox-report'
+
+    reportResults
+    exit 0
+fi
 
 check "the bind mount was set up, so the scenario is testing something real" bash -c '
     awk "\$5 == \"/tmp/fake-x11/X0\"" /proc/self/mountinfo | grep -q fake-x11 \
-        || { echo "no bind mount; SYS_ADMIN may not have applied"; exit 1; }
+        || { echo "no bind mount in the table"; exit 1; }
     ls -l /tmp/fake-x11/X0'
 
-# The proof that the danger is real, not theoretical: the same chmod the sweeper would otherwise
+# The proof that the danger is real and not theoretical: the same chmod the sweeper would otherwise
 # apply, shown writing through to the source.
 check "chmod on the mount point does write through to the source" bash -c '
     sudo cp -a /tmp/pretend-host-wayland.sock /tmp/writethrough-canary.sock

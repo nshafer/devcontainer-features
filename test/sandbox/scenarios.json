@@ -19,6 +19,9 @@
     "capAdd": [
       "SYS_ADMIN"
     ],
+    "securityOpt": [
+      "apparmor=unconfined"
+    ],
     "features": {
       "sandbox": {}
     }

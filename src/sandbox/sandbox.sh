@@ -43,6 +43,12 @@ USER_UID=0
 ROOTS="${SANDBOX_ROOTS:-/tmp /run}"
 X11_DIR="${SANDBOX_X11_DIR:-/tmp/.X11-unix}"
 GNUPG_DIR="${SANDBOX_GNUPG_DIR:-$USER_HOME/.gnupg}"
+# Overridable for the same reason, and it buys something the others do not: the bind-mount guard
+# below can then be tested with a synthetic mount table, on any kernel, without the privileges a
+# real `mount --bind` needs. Creating one requires CAP_SYS_ADMIN *and* an unconfined AppArmor
+# profile, and CI runners have the second of those locked down -- so without this the single most
+# safety-critical branch in this file would go untested exactly where it matters most.
+MOUNTINFO="${SANDBOX_MOUNTINFO:-/proc/self/mountinfo}"
 
 log() { echo "==> sandbox: $*"; }
 warn() { echo "!!! sandbox: $*" >&2; }
@@ -53,7 +59,7 @@ warn() { echo "!!! sandbox: $*" >&2; }
 # mount are written through to the source, so a chmod here lands on the socket the host's own
 # desktop session is using. Every mutation below is gated on this returning false.
 is_mount() {
-    awk -v p="$1" '$5 == p { found = 1 } END { exit !found }' /proc/self/mountinfo 2>/dev/null
+    awk -v p="$1" '$5 == p { found = 1 } END { exit !found }' "$MOUNTINFO" 2>/dev/null
 }
 
 # Returns 0 only if it actually sealed something, so callers can count.
@@ -279,7 +285,7 @@ report() {
 
     # Reported rather than acted on: it is a bind mount, and the only lever for it is on the host.
     local wayland
-    wayland="$(awk '$5 ~ /wayland/ { print $5 }' /proc/self/mountinfo 2>/dev/null | tr '\n' ' ')"
+    wayland="$(awk '$5 ~ /wayland/ { print $5 }' "$MOUNTINFO" 2>/dev/null | tr '\n' ' ')"
     if [ -n "${wayland// /}" ]; then
         printf '  %-16s REACHABLE: %s\n' "wayland display" "$wayland"
         printf '  %-16s (bind mount; set "dev.containers.mountWaylandSocket": false on the host)\n' ""

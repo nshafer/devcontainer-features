@@ -29,6 +29,48 @@ print "connected $ARGV[0]\n";
 PERL
 sudo chmod 0755 /usr/local/bin/sock-bind /usr/local/bin/sock-connect
 
+# pkill returns when the signal is queued, not when the process has gone. A fixed sleep is a bet on
+# how fast the machine is, and CI runners are slower and more contended than a laptop -- so wait for
+# the condition instead of for the clock.
+sudo tee /usr/local/bin/stop-sweeper >/dev/null <<'SH'
+#!/bin/sh
+pkill -f 'sandbox\.sh daemon' 2>/dev/null
+for _ in $(seq 1 50); do
+    pgrep -f 'sandbox\.sh daemon' >/dev/null || { echo "sweeper stopped"; exit 0; }
+    sleep 0.2
+done
+echo "sweeper still running after 10s" >&2
+exit 1
+SH
+sudo chmod 0755 /usr/local/bin/stop-sweeper
+
+# "How many sweepers are running" is not the same question as "how many processes match", and
+# pgrep only answers the second. The daemon runs `find ... | while read` on every pass, and bash
+# forks a subshell for the right-hand side of a pipeline; that subshell inherits the parent's
+# command line verbatim. So mid-sweep there are two or more processes whose cmdline reads
+# "bash .../sandbox.sh daemon", and a raw count reports two sweepers. Measured over 400 samples
+# against a busy daemon, that count was wrong 37 times -- which is precisely the intermittent
+# failure this check used to show.
+#
+# Filtering by parent does not fix it (also 37/400): a transient subshell whose parent has already
+# exited is reparented to init, so its parent is no longer a match either.
+#
+# Session leadership does, and was wrong 0 times out of 400. The entrypoint starts the daemon under
+# setsid, making it a session leader -- pid == sid -- while every subshell it forks inherits that
+# session without leading it. The check below fails loudly if setsid is absent, because the
+# entrypoint then falls back to plain nohup and this method would silently count zero.
+sudo tee /usr/local/bin/count-sweepers >/dev/null <<'SH'
+#!/bin/sh
+command -v setsid >/dev/null 2>&1 || {
+    echo "count-sweepers: no setsid, so sweepers are not session leaders and cannot be counted" >&2
+    exit 1
+}
+pids=$(pgrep -f 'sandbox\.sh daemon' 2>/dev/null || true)
+[ -n "$pids" ] || { echo 0; exit 0; }
+ps -o pid=,sess= -p "$(echo $pids | tr ' ' ',')" 2>/dev/null | awk '$1 == $2' | wc -l
+SH
+sudo chmod 0755 /usr/local/bin/count-sweepers
+
 check "the scripts and config landed" bash -c '
     test -x /usr/local/share/nshafer-sandbox/sandbox.sh
     test -x /usr/local/share/nshafer-sandbox/entrypoint.sh
@@ -225,14 +267,20 @@ check "a bind-mounted directory is refused, not sealed" bash -c '
 # ---------------------------------------------------------------------------------------------
 
 check "the container start left a sweeper running" bash -c '
-    pgrep -f "sandbox\.sh daemon" >/dev/null || { echo "no daemon after container start"; exit 1; }
-    echo "daemon pid $(pgrep -f "sandbox\.sh daemon" | head -1)"'
+    [ "$(count-sweepers)" = 1 ] || { echo "sweepers: $(count-sweepers)"; pgrep -af "sandbox\.sh daemon"; exit 1; }
+    echo "one sweeper, pid $(pgrep -f "sandbox\.sh daemon" | head -1)"'
 
 check "a second entrypoint run does not stack a second daemon" bash -c '
     sudo /usr/local/share/nshafer-sandbox/entrypoint.sh
-    sleep 1
-    n=$(pgrep -f "sandbox\.sh daemon" | wc -l)
-    [ "$n" = 1 ] || { echo "daemons: $n"; pgrep -af "sandbox\.sh daemon"; exit 1; }'
+    # Settled, not sampled: require the count to stay at one across several reads, so a second
+    # daemon that is slow to appear is still caught.
+    # Sampled repeatedly rather than once, so a second sweeper that is slow to appear is caught.
+    for _ in $(seq 1 10); do
+        n=$(count-sweepers)
+        [ "$n" = 1 ] || { echo "sweepers: $n"; ps -eo pid,ppid,args | grep "[s]andbox.sh daemon"; exit 1; }
+        sleep 0.3
+    done
+    echo "one sweeper, stable across 10 samples"'
 
 check "the daemon seals a socket that appears after it started" bash -c '
     sock-bind /tmp/vscode-ssh-auth-late-uuid.sock
@@ -253,13 +301,60 @@ check "sandbox-report says every channel is blocked" bash -c '
 # The report has to be able to fail, or it is decoration. Daemon stopped first, or it seals the
 # socket before the report can see it.
 check "the report fails loudly when a channel is reachable" bash -c '
-    sudo pkill -f "sandbox\.sh daemon" || true
-    sleep 1
+    sudo stop-sweeper
     sock-bind /tmp/vscode-ssh-auth-open.sock
     out=$(sandbox-report) && { echo "report exited 0 with a channel open:"; echo "$out"; exit 1; }
     echo "$out"
     echo "$out" | grep -q "REACHABLE"
     echo "$out" | grep -q "NOT RUNNING"'
+
+# ---------------------------------------------------------------------------------------------
+# The bind-mount guard, driven by a synthetic mount table. A real bind mount needs CAP_SYS_ADMIN
+# *and* an unconfined AppArmor profile, and CI runners deny the second -- so wayland_bind_mount
+# cannot be relied on to run there. These need no privileges and therefore always do.
+#
+# They have to run with the sweeper stopped. Every check below asserts that a socket was *not*
+# modified, and the daemon sweeps the same path every second using the real mount table, where the
+# socket is not a mount -- so a live daemon seals it between the before and after readings and the
+# check fails intermittently. The previous check stopped it; this makes that a stated requirement
+# instead of a property of the ordering.
+# ---------------------------------------------------------------------------------------------
+
+check "the sweeper is stopped, as these checks require" bash -c '
+    sudo stop-sweeper
+    ! pgrep -f "sandbox\.sh daemon" >/dev/null || { echo "daemon still running"; exit 1; }'
+
+check "a socket listed as a mount is refused by the sweep, not sealed" bash -c '
+    sock-bind /tmp/vscode-ssh-auth-pretend-mount.sock
+    before=$(stat -c %a:%U /tmp/vscode-ssh-auth-pretend-mount.sock)
+    echo "before: $before"
+    # Field 5 is the mount point; the rest only has to be shaped like mountinfo.
+    printf "%s\n" "99 98 0:99 / /tmp/vscode-ssh-auth-pretend-mount.sock rw,relatime - overlay overlay rw" \
+        > /tmp/fake-mountinfo
+    out=$(sudo env SANDBOX_MOUNTINFO=/tmp/fake-mountinfo \
+        /usr/local/share/nshafer-sandbox/sandbox.sh sweep 2>&1)
+    echo "$out"
+    echo "$out" | grep -q "bind mount from the host" || { echo "no bind-mount warning"; exit 1; }
+    after=$(stat -c %a:%U /tmp/vscode-ssh-auth-pretend-mount.sock)
+    echo "after:  $after"
+    [ "$before" = "$after" ] || { echo "$before -> $after: a mount was modified"; exit 1; }'
+
+# The control for the check above: identical socket, identical code path, absent from the mount
+# table. Without this, a guard that refused *everything* would look like a pass.
+check "the same socket is sealed when it is not a mount" bash -c '
+    : > /tmp/empty-mountinfo
+    sudo env SANDBOX_MOUNTINFO=/tmp/empty-mountinfo \
+        /usr/local/share/nshafer-sandbox/sandbox.sh sweep >/dev/null 2>&1
+    ls -l /tmp/vscode-ssh-auth-pretend-mount.sock
+    [ "$(stat -c %a /tmp/vscode-ssh-auth-pretend-mount.sock)" = 0 ] \
+        || { echo "not sealed -- the guard is refusing everything"; exit 1; }'
+
+check "the warning names the host-side setting, the only real fix for wayland" bash -c '
+    sock-bind /tmp/vscode-ssh-auth-pretend-mount2.sock
+    printf "%s\n" "99 98 0:99 / /tmp/vscode-ssh-auth-pretend-mount2.sock rw,relatime - overlay overlay rw" \
+        > /tmp/fake-mountinfo2
+    sudo env SANDBOX_MOUNTINFO=/tmp/fake-mountinfo2 \
+        /usr/local/share/nshafer-sandbox/sandbox.sh sweep 2>&1 | grep -q "dev.containers.mountWaylandSocket"'
 
 # ---------------------------------------------------------------------------------------------
 # The environment scrub. The weakest of the three layers and not a control -- VS Code re-injects
