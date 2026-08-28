@@ -29,8 +29,8 @@ project's `devcontainer.json` mentioning them:
 declare one — see its notes below — so it belongs in the projects that actually want it.
 
 `sandbox` is not in it either, for the opposite reason: it works everywhere, but it is supposed to
-break things. Signing commits, `git push` over SSH, `code .` from the container terminal and GUI
-apps on your desktop all stop working inside any container that has it. That is the trade it
+break things. Signing commits, `git push` over SSH, `code .` from the container terminal, GUI apps
+on your desktop and **`sudo`** all stop working inside any container that has it. That is the trade it
 exists to make, and it belongs in the containers running an agent rather than in all of them.
 
 Two things to know about that setting: it is contributed by the Dev Containers VS Code extension, so the
@@ -198,6 +198,13 @@ inotify is a ~2,000× reduction and it is why the feature installs `inotify-tool
 zero, and **one connection is enough** to have your host's `ssh-agent` sign something. The window
 reopens on every window you attach, not just the first.
 
+**All of that rests on the remote user not being root**, and a stock dev container hands them
+passwordless sudo — one `sudo chmod 666` undoes every seal here. So the feature removes the grant
+(`dropSudo`, on by default): it deletes the `sudoers.d` entry, drops the user from `sudo`/`wheel`/
+`admin`, then *verifies by outcome* and strips the setuid bit from `sudo` if any route survived.
+**This is the change that turns the rest from theatre into something an agent has to work around
+rather than switch off** — and it means `sudo` stops working in the container, for you too.
+
 What it *does* hold: once sealed, a UUID-named socket is closed for good — `/tmp` is sticky and a
 root-owned file in it cannot be removed by the remote user at all. Recreating one gets you a socket
 bound to your own process with nothing behind it, because the forwarding lives in the helper
@@ -213,6 +220,7 @@ agent that is not specifically racing the seal all fail.
   `srwxrwxr-x`, and connecting to a Unix socket needs *write* permission, which `other` does not
   have — verified: a second user is refused even on a completely unsealed socket. No window, no
   race, nothing to seal.
+- **Keep `dropSudo` on.** With sudo, none of this is even mitigation.
 - **Upstream.** Until the Dev Containers extension offers a way to decline forwarding per container
   — or forwards to something more restrictive than a world-reachable, same-uid socket — a feature
   installed inside the container is always acting after the fact.
@@ -245,7 +253,7 @@ checks anything else.
 
 The cost is stated rather than hidden: with the directory writable, a tombstone inside it can be
 unlinked by the user who owns that directory, so the fixed-name channels — X11 and GPG — are open
-for at most one sweep interval rather than never. The UUID-named channels keep the stronger
+for the moment between the helper creating it and inotify firing, rather than never. The UUID-named channels keep the stronger
 guarantee, because `/tmp` is sticky and a root-owned file in it cannot be removed by the user at
 all.
 
@@ -310,7 +318,7 @@ sandbox: forwarded host channels in this container
   gpg agent        blocked
   x11 display      blocked
   vscode ipc       blocked
-  sweeper          running, every 1s
+  sweeper          running (inotify, 1s poll backstop)
 ```
 
 **`no-new-privileges` is not part of the feature**, though it pairs well with it. A feature's

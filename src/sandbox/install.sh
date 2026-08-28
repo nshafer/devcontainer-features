@@ -15,6 +15,7 @@ BLOCK_GPG="${BLOCKGPGAGENT:-true}"
 BLOCK_X11="${BLOCKX11:-true}"
 BLOCK_IPC="${BLOCKVSCODEIPC:-true}"
 SCRUB_ENV="${SCRUBENV:-true}"
+DROP_SUDO="${DROPSUDO:-true}"
 SWEEP_INTERVAL="${SWEEPINTERVAL:-1}"
 
 SHARE_DIR=/usr/local/share/nshafer-sandbox
@@ -35,7 +36,7 @@ fi
 USER_UID="$(id -u "$USERNAME" 2>/dev/null || echo 0)"
 
 echo "==> sandbox: user=$USERNAME home=$USER_HOME uid=$USER_UID"
-echo "==> sandbox: ssh=$BLOCK_SSH gpg=$BLOCK_GPG x11=$BLOCK_X11 ipc=$BLOCK_IPC scrubEnv=$SCRUB_ENV"
+echo "==> sandbox: ssh=$BLOCK_SSH gpg=$BLOCK_GPG x11=$BLOCK_X11 ipc=$BLOCK_IPC scrubEnv=$SCRUB_ENV dropSudo=$DROP_SUDO"
 
 if [ "$USERNAME" = "root" ]; then
     echo "!!! sandbox: the remote user is root, so nothing here is a real boundary -- root can" >&2
@@ -43,7 +44,8 @@ if [ "$USERNAME" = "root" ]; then
 fi
 
 # The sweeper works without this -- it falls back to the poll interval -- but the gap between a
-# forwarded socket appearing and being sealed then runs to a whole second, which measured out at
+# forwarded socket appearing and being sealed then waits for the next poll -- up to a whole
+# second, which measured out at
 # ~14,000 usable connections. inotify takes that to roughly a millisecond. Not fatal if the package
 # is unavailable, so a failure here is a warning rather than a failed build.
 if ! command -v inotifywait >/dev/null 2>&1; then
@@ -77,6 +79,7 @@ BLOCK_GPG=$BLOCK_GPG
 BLOCK_X11=$BLOCK_X11
 BLOCK_IPC=$BLOCK_IPC
 SWEEP_INTERVAL=$SWEEP_INTERVAL
+DROP_SUDO=$DROP_SUDO
 USERNAME=$USERNAME
 USER_HOME=$USER_HOME
 USER_UID=$USER_UID
@@ -116,5 +119,9 @@ EOF
     done
     echo "==> sandbox: env scrub wired into profile.d, bash.bashrc, zshenv and BASH_ENV"
 fi
+
+# Dropped at build time as well as at every container start, so the image itself ships without the
+# grant -- a container whose entrypoint never runs is still not one the agent can trivially unlock.
+"$SHARE_DIR/sandbox.sh" drop-sudo || true
 
 echo "==> sandbox: build stage done"

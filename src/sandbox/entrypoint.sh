@@ -24,6 +24,9 @@ LOG=/var/log/nshafer-sandbox.log
     # this feature sealed will stop VS Code attaching at all, and the persisted home volume means
     # it outlives the rebuild that was supposed to fix it.
     "$SHARE_DIR/sandbox.sh" repair
+    # Before the daemon and before anything is attached: with sudo in hand the remote user can undo
+    # every seal below, so this is the one that has to hold for the rest to mean anything.
+    "$SHARE_DIR/sandbox.sh" drop-sudo
     "$SHARE_DIR/sandbox.sh" block-fixed
 } >> "$LOG" 2>&1 || true
 

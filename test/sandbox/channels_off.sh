@@ -3,16 +3,8 @@
 # regardless of what you asked for is one nobody can adopt a channel at a time.
 set -e
 source dev-container-features-test-lib
+source ./_helpers.sh
 
-sudo tee /usr/local/bin/sock-bind >/dev/null <<'PERL'
-#!/usr/bin/perl
-use strict; use Socket;
-socket(my $s, PF_UNIX, SOCK_STREAM, 0) or die "socket: $!\n";
-bind($s, sockaddr_un($ARGV[0])) or die "bind refused: $!\n";
-listen($s, 1);
-print "bound $ARGV[0]\n";
-PERL
-sudo chmod 0755 /usr/local/bin/sock-bind
 
 check "the options reached the config" bash -c '
     . /usr/local/share/nshafer-sandbox/config
@@ -25,21 +17,21 @@ check "the options reached the config" bash -c '
 check "a display socket is not touched" bash -c '
     mkdir -p /tmp/.X11-unix
     sock-bind /tmp/.X11-unix/X9
-    sudo /usr/local/share/nshafer-sandbox/sandbox.sh sweep
+    sudo -n /usr/local/share/nshafer-sandbox/sandbox.sh sweep
     ls -l /tmp/.X11-unix/X9
     [ "$(stat -c %a /tmp/.X11-unix/X9)" != 0 ] || { echo "sealed despite blockX11=false"; exit 1; }'
 
 check "a gpg agent socket is not touched" bash -c '
     mkdir -p -m 700 "$HOME/.gnupg"
     sock-bind "$HOME/.gnupg/S.gpg-agent"
-    sudo /usr/local/share/nshafer-sandbox/sandbox.sh sweep
+    sudo -n /usr/local/share/nshafer-sandbox/sandbox.sh sweep
     ls -l "$HOME/.gnupg/S.gpg-agent"
     [ "$(stat -c %a "$HOME/.gnupg/S.gpg-agent")" != 0 ] \
         || { echo "sealed despite blockGpgAgent=false"; exit 1; }'
 
 check "a forwarded ssh socket is not touched" bash -c '
     sock-bind /tmp/vscode-ssh-auth-off.sock
-    sudo /usr/local/share/nshafer-sandbox/sandbox.sh sweep
+    sudo -n /usr/local/share/nshafer-sandbox/sandbox.sh sweep
     ls -l /tmp/vscode-ssh-auth-off.sock
     [ "$(stat -c %a /tmp/vscode-ssh-auth-off.sock)" != 0 ] \
         || { echo "sealed despite blockSshAgent=false"; exit 1; }
@@ -47,7 +39,7 @@ check "a forwarded ssh socket is not touched" bash -c '
 
 check "a vscode ipc socket is not touched" bash -c '
     sock-bind /tmp/vscode-ipc-off.sock
-    sudo /usr/local/share/nshafer-sandbox/sandbox.sh sweep
+    sudo -n /usr/local/share/nshafer-sandbox/sandbox.sh sweep
     [ "$(stat -c %a /tmp/vscode-ipc-off.sock)" != 0 ] \
         || { echo "sealed despite blockVscodeIpc=false"; exit 1; }'
 

@@ -30,6 +30,7 @@ BLOCK_GPG=true
 BLOCK_X11=true
 BLOCK_IPC=true
 SWEEP_INTERVAL=1
+DROP_SUDO=true
 # shellcheck disable=SC2034
 USERNAME=root
 USER_HOME=/root
@@ -87,6 +88,68 @@ tombstone() {
     return 0
 }
 
+# Everything else in this file rests on one assumption: that the remote user cannot become root.
+# A stock dev container breaks that assumption on purpose -- common-utils grants passwordless sudo --
+# and with it every tombstone here is one command from being undone:
+#
+#     sudo chmod 666 /tmp/vscode-ssh-auth-*.sock
+#
+# So the grant goes. This is the single change that turns the rest of the feature from theatre into
+# something an agent has to work around rather than simply switch off.
+#
+# Re-asserted at every container start, not just at build time, because a later feature or a
+# project's own postCreate can put the grant back.
+sudo_works() {
+    command -v sudo >/dev/null 2>&1 || return 1
+    if command -v runuser >/dev/null 2>&1; then
+        runuser -u "$USERNAME" -- sudo -n true >/dev/null 2>&1
+    else
+        su -s /bin/sh -c 'sudo -n true' "$USERNAME" >/dev/null 2>&1
+    fi
+}
+
+drop_sudo() {
+    [ "$DROP_SUDO" = true ] || return 0
+    if [ "$USERNAME" = root ]; then
+        warn "the remote user is root, so there is no sudo grant to drop and nothing here binds"
+        return 0
+    fi
+    sudo_works || return 0
+
+    # The grant common-utils writes is /etc/sudoers.d/<username>; drop any file that names the user.
+    for f in /etc/sudoers.d/*; do
+        [ -f "$f" ] || continue
+        if grep -qE "^[[:space:]]*${USERNAME}[[:space:]]" "$f" 2>/dev/null; then
+            rm -f "$f" && log "removed sudo grant $f"
+        fi
+    done
+
+    # And the group-based route, which no per-user file mentions.
+    for grp in sudo wheel admin; do
+        if id -nG "$USERNAME" 2>/dev/null | tr ' ' '\n' | grep -qx "$grp"; then
+            if deluser "$USERNAME" "$grp" >/dev/null 2>&1 || gpasswd -d "$USERNAME" "$grp" >/dev/null 2>&1; then
+                log "removed $USERNAME from group $grp"
+            fi
+        fi
+    done
+
+    # Verified by outcome, not by the steps above: sudo is configurable in more ways than are worth
+    # enumerating, and a grant this missed would silently hand back everything. If it still works,
+    # take the setuid bit off the binary, which no amount of sudoers configuration can restore.
+    if sudo_works; then
+        local bin
+        bin="$(command -v sudo 2>/dev/null)"
+        warn "$USERNAME can still sudo after removing the grants; stripping setuid from $bin"
+        chmod u-s "$bin" 2>/dev/null || true
+    fi
+
+    if sudo_works; then
+        warn "$USERNAME CAN STILL BECOME ROOT. Every block in this feature is undoable."
+    else
+        log "dropped sudo for $USERNAME"
+    fi
+}
+
 # Undo what version 1.0.0 of this feature did, because it does not go away on its own.
 #
 # 1.0.0 sealed /tmp/.X11-unix and ~/.gnupg by making the *directories* root-owned and mode 0555.
@@ -141,7 +204,8 @@ repair() {
 #
 # The cost is honest: because the directory stays writable by the remote user, a tombstone in it
 # can be unlinked -- the owner of a directory may remove anything inside it. The sweeper puts it
-# straight back, so the channel is open for at most one sweep interval rather than never. The
+# straight back -- on the kernel's create event, so within about a millisecond rather than on the
+# next poll -- so the channel is open briefly rather than never. The
 # UUID-named channels below keep the stronger guarantee, because /tmp is sticky and root's file in
 # it cannot be removed by the user at all.
 block_fixed() {
@@ -318,8 +382,24 @@ report() {
         open=$((open + 1))
     fi
 
+    # Reported first among the mechanisms, because it is the one the others depend on: with sudo
+    # in hand every seal above is one command from being undone.
+    if [ "$DROP_SUDO" != true ]; then
+        printf '  %-16s not dropped (option is off) -- every block above is undoable\n' "sudo"
+    elif sudo_works; then
+        printf '  %-16s STILL AVAILABLE to %s -- every block above is undoable\n' "sudo" "$USERNAME"
+        open=$((open + 1))
+    else
+        printf '  %-16s dropped\n' "sudo"
+    fi
+
     if pgrep -f 'sandbox\.sh daemon' >/dev/null 2>&1; then
-        printf '  %-16s running, every %ss\n' "sweeper" "$SWEEP_INTERVAL"
+        if [ -n "$INOTIFY" ]; then
+            printf '  %-16s running (inotify, %ss poll backstop)\n' "sweeper" "$SWEEP_INTERVAL"
+        else
+            printf '  %-16s running (POLL ONLY, every %ss -- inotifywait is not installed)\n' \
+                "sweeper" "$SWEEP_INTERVAL"
+        fi
     else
         printf '  %-16s NOT RUNNING\n' "sweeper"
         open=$((open + 1))
@@ -398,9 +478,10 @@ daemon() {
 case "${1:-sweep}" in
     block-fixed)    block_fixed ;;
     repair)         repair ;;
+    drop-sudo)      drop_sudo ;;
     sweep)          block_fixed; sweep ;;
     daemon)         daemon ;;
     report)         report ;;
     check-manifest) check_manifest "${2:-$$}" ;;
-    *)              echo "usage: sandbox.sh {repair|block-fixed|sweep|daemon|report|check-manifest}" >&2; exit 2 ;;
+    *)              echo "usage: sandbox.sh {repair|drop-sudo|block-fixed|sweep|daemon|report|check-manifest}" >&2; exit 2 ;;
 esac

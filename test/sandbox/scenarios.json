@@ -1,4 +1,13 @@
 {
+  "sudo_kept": {
+    "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+    "remoteUser": "node",
+    "features": {
+      "sandbox": {
+        "dropSudo": false
+      }
+    }
+  },
   "channels_off": {
     "image": "mcr.microsoft.com/devcontainers/base:debian",
     "remoteUser": "vscode",
@@ -9,7 +18,8 @@
         "blockX11": false,
         "blockVscodeIpc": false,
         "scrubEnv": false,
-        "sweepInterval": "5"
+        "sweepInterval": "5",
+        "dropSudo": false
       }
     }
   },
@@ -23,7 +33,9 @@
       "apparmor=unconfined"
     ],
     "features": {
-      "sandbox": {}
+      "sandbox": {
+        "dropSudo": false
+      }
     }
   }
 }
