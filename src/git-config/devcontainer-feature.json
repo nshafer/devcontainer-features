@@ -9,7 +9,7 @@
     {
       "source": "${localEnv:HOME}/.config/git",
       "target": "/mnt/git-config",
-      "type": "bind"
+      "type": "bind,readonly"
     }
   ],
   "postCreateCommand": "/usr/local/share/nshafer-git-config/post-create.sh",
