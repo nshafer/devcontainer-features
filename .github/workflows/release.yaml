@@ -4,10 +4,19 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['src/**']
+    # test/** is here as well as src/**, so a push that only changes a test still runs the suite.
+    # Such a push reaches the release job too, which is harmless: with no version bumped there is
+    # nothing to publish and nothing to regenerate.
+    paths: ['src/**', 'test/**']
 
 jobs:
+  # The whole test matrix, run from test.yaml rather than repeated here. Nothing is published
+  # unless every feature in it passes.
+  test:
+    uses: ./.github/workflows/test.yaml
+
   release:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: write
