@@ -8,9 +8,12 @@
 # ~/.gitconfig — requiring an empty ~/.gitconfig to exist on the host, the way a bind mount would,
 # silently switches off the entire git configuration of an XDG setup.
 #
-# The mount is read-write: a feature's mount objects take source, target and type only, and there is
-# no readonly among them. Nothing below writes to $SRC, and nothing below should ever start to — the
-# source is the host's own git directory, and a stray write there lands on the host.
+# The mount is read-only, which a feature's mount metadata cannot say on its own: its schema takes
+# source, target and type only, and type is limited to "bind" or "volume". The CLI renders a mount
+# as `--mount type=<type>,src=<source>,dst=<target>`, so the flag rides along on the end of the
+# target ("/mnt/git-config,readonly") and docker parses it as its own option. Nothing below writes
+# to $SRC anyway, and nothing below should ever start to — the source is the host's own git
+# directory, and a stray write there would land on the host.
 #
 # The files are copied whole, sections and all. Nothing is stripped on the way in: a filter driver
 # whose command is missing here is worth the hard failure it causes, because that failure is the

@@ -4,9 +4,10 @@ source dev-container-features-test-lib
 
 # postCreateCommand does not run in this harness, so drive the copy directly. Assertions compare
 # against the mounted host files rather than hardcoding values, so they hold on any machine.
-# Nothing here writes to /mnt/git-config: that mount is the host's real git directory, and it is
-# mounted read-write because a feature's mount metadata has no way to say otherwise. Snapshot it
-# first so the run below can be held to that.
+# Nothing here writes to /mnt/git-config: that mount is the host's real git directory. It is mounted
+# read-only, but the snapshot below still holds the run to leaving it alone, since the read-only
+# flag reaches docker through a workaround (see the mount comment in post-create.sh) that a future
+# CLI could stop honoring silently.
 before=$(find /mnt/git-config -type f -exec md5sum {} + | sort; find /mnt/git-config -exec stat -c '%n %Y %a' {} + | sort)
 
 /usr/local/share/nshafer-git-config/post-create.sh
@@ -58,6 +59,15 @@ check "unsets keys naming a program this container lacks, keeps the rest" bash -
     [ "$(g filter.lfs.required)" = true ] || { echo "lfs filter was stripped"; exit 1; }
     echo "$out" | grep -q "definitely-not-installed-xyz is not installed" || { echo "no reason given"; exit 1; }
     exit 0'
+
+# The regression check for the readonly flag smuggled through the mount target. Read from
+# /proc/mounts rather than by attempting a write: if the flag ever stops being honored, a probe
+# write would land in the host's real git directory.
+check "the host mount is read-only" bash -c '
+    opts=$(awk "\$2 == \"/mnt/git-config\" { print \$4 }" /proc/mounts | tail -n1)
+    [ -n "$opts" ] || { echo "/mnt/git-config is not a mount point"; exit 1; }
+    case ",$opts," in *,ro,*) exit 0;; esac
+    echo "/mnt/git-config is mounted $opts"; exit 1'
 
 check "leaves the host mount untouched" bash -c '
     after=$(find /mnt/git-config -type f -exec md5sum {} + | sort; find /mnt/git-config -exec stat -c "%n %Y %a" {} + | sort)

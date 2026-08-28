@@ -105,12 +105,14 @@ One mount, `~/.config/git` → `/mnt/git-config`, so a global ignore file needs 
 at all: `~/.config/git/ignore` is where git looks by default. Copies rather than links, so the
 container can adjust its own config without writing back to the host.
 
-That mount is read-write, and not by choice: a feature's `mounts` are objects with `source`,
-`target` and `type` only — `type` takes `bind` or `volume`, and there is nowhere to put `readonly`.
-The string form that would carry it is not what the feature schema accepts. So nothing but
-discipline keeps the host's git directory intact, and the discipline is: the feature only ever
-reads `/mnt/git-config`, the container's own git writes to `$HOME/.config/git`, and a test asserts
-the mount is byte-identical after a run.
+That mount is read-only, which the metadata has no field for: a feature's `mounts` are objects with
+`source`, `target` and `type` only, `type` takes `bind` or `volume`, and the string form that would
+carry `readonly` is not what the feature schema accepts. The CLI renders a mount as
+`--mount type=<type>,src=<source>,dst=<target>`, so the flag rides along on the end of the target —
+`"target": "/mnt/git-config,readonly"` — and docker parses it as an option of its own. Discipline
+backs it up, since the trick depends on how the CLI builds that argument: the feature only ever
+reads `/mnt/git-config`, the container's own git writes to `$HOME/.config/git`, and tests assert
+both that the mount is read-only and that it is byte-identical after a run.
 
 The files go in **whole** — every section, filters included. A filter driver whose command is not
 installed in the container is left to fail, because with `required = true` that failure is a hard
