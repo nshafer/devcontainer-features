@@ -1,0 +1,40 @@
+{
+  "id": "tidewave",
+  "version": "1.0.0",
+  "name": "Tidewave (nshafer)",
+  "description": "Installs the Tidewave CLI at build time and starts it on every container start, so the Tidewave app on the host can drive the project inside the container.",
+  "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/tidewave",
+  "options": {
+    "version": {
+      "type": "string",
+      "default": "latest",
+      "proposals": [
+        "latest"
+      ],
+      "description": "Version to install: 'latest', or an exact X.Y.Z matching a tidewave_app release tag."
+    },
+    "port": {
+      "type": "string",
+      "default": "9000",
+      "proposals": [
+        "9000",
+        "9832"
+      ],
+      "description": "Port the CLI listens on inside the container. It has to be published to the identical port number on the host -- the CLI rejects a request whose Origin names a different port -- so add \"appPort\": [\"127.0.0.1:9000:9000\"] to devcontainer.json."
+    },
+    "allowRemoteAccess": {
+      "type": "boolean",
+      "default": true,
+      "description": "Pass --allow-remote-access, which binds 0.0.0.0 instead of 127.0.0.1. Required for a published port to reach it: Docker forwards to the container's bridge address, not to its loopback. The CLI still rejects requests whose Origin is not localhost."
+    },
+    "autostart": {
+      "type": "boolean",
+      "default": true,
+      "description": "Start the CLI at postStart. Turn off to install the binary only and run 'tidewave' yourself."
+    }
+  },
+  "postStartCommand": "/usr/local/share/nshafer-tidewave/post-start.sh",
+  "installsAfter": [
+    "ghcr.io/devcontainers/features/common-utils"
+  ]
+}

@@ -1,14 +1,15 @@
 # devcontainer-features
 
 Personal [dev container features](https://containers.dev/implementors/features/), so the same
-Claude setup, git config files and persisted home directory don't have to be copy-pasted into
-every project's `devcontainer.json`.
+Claude setup, git config files, persisted home directory and Tidewave bridge don't have to be
+copy-pasted into every project's `devcontainer.json`.
 
 | Feature                                  | What it does                                                                                      |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | [`claude`](src/claude)                   | Installs the Claude Code CLI and copies the host's `~/.claude/settings.json` into the container.  |
 | [`git-config`](src/git-config)           | Copies the host's git config and excludes file into the container.                                |
 | [`persist-homedir`](src/persist-homedir) | Keeps `/home` on a per-project named volume across rebuilds, minus the VS Code server/extensions. |
+| [`tidewave`](src/tidewave)               | Installs the Tidewave CLI and starts it on every container start.                                 |
 
 ## Use them everywhere
 
@@ -22,6 +23,9 @@ project's `devcontainer.json` mentioning them:
   "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {}
 }
 ```
+
+`tidewave` is deliberately not in that list. It needs a published port, and a feature cannot
+declare one — see its notes below — so it belongs in the projects that actually want it.
 
 Two things to know about that setting: it is contributed by the Dev Containers VS Code extension, so the
 standalone `devcontainer` CLI ignores it — containers created with `devcontainer up` need the
@@ -140,6 +144,73 @@ projects whose folders have the same basename will share one.
 The remote user's home must be under `/home` for the volume to cover it. `install.sh` warns when it
 is not, and carries on — the `~/.vscode-server` redirect still works either way.
 
+### tidewave
+
+Runs the [Tidewave](https://tidewave.ai) CLI inside the container so the Tidewave app on the host
+can drive the project. Two halves: the binary is downloaded at **image build time** to
+`/usr/local/bin/tidewave`, and a `postStartCommand` starts it on every container start.
+
+```jsonc
+"features": {
+  "ghcr.io/nshafer/devcontainer-features/tidewave:1": {}
+},
+"appPort": ["127.0.0.1:9000:9000"],
+"remoteEnv": { "TIDEWAVE_HOST_PATH": "${localEnv:TIDEWAVE_HOST_PATH}" }
+```
+
+Both of those lines are the project's job, because a feature cannot express either — see the
+constraints section. The feature says so in the creation log when `TIDEWAVE_HOST_PATH` is missing;
+without it the app hands the host's editor container paths it cannot open.
+
+| Option              | Default  | |
+| ------------------- | -------- | --- |
+| `version`           | `latest` | Or an exact `X.Y.Z` matching a `tidewave_app` release tag. A tag that does not exist fails the build. |
+| `port`              | `9000`   | |
+| `allowRemoteAccess` | `true`   | |
+| `autostart`         | `true`   | Off installs the binary and starts nothing. |
+
+**The published port has to be the same number on both sides.** `9000:9000`, never `9411:9000`.
+The CLI checks the `Origin` header and rejects one naming a port other than its own — measured, and
+the reason upstream's containers guide says the app must be reachable "using the same host and port
+inside and outside the container".
+
+**`allowRemoteAccess` defaults on because nothing works without it.** Left off, the CLI binds
+`127.0.0.1` only, and a published port cannot reach that: Docker forwards to the container's bridge
+address, not to its loopback. (Upstream's own devcontainer snippet omits the flag; a container built
+from it has a port nobody can connect to.) Binding `0.0.0.0` is less alarming than it reads — the
+`Origin` check above still stands, so a request from anywhere but a `localhost` origin gets a 403,
+and `appPort` binding `127.0.0.1` keeps the port off the machine's other interfaces.
+
+**The libc build is detected, not chosen** — glibc unless the image is genuinely musl. The CLI
+binary itself would not care: the musl asset is statically linked and runs fine on Debian. What
+cares is the **Bun runtime the CLI downloads at first use** into `~/.cache/tidewave/downloads`. The
+CLI picks which Bun to fetch from its own build triple, which it reports verbatim from
+`POST /about` with no idea what the host libc actually is, so a musl CLI on Debian fetches
+`bun-linux-x64-musl` and the image has no loader for it:
+
+```
+sh: 1: /home/node/.cache/tidewave/downloads/bun-linux-x64-musl-1-3-10: not found
+```
+
+Detection is `ldd --version` naming musl, or the `/lib/ld-musl-<arch>.so.1` loader existing for
+images with no `ldd`; everything else gets gnu. Both branches are covered by tests — the default
+suite asserts a gnu asset and a gnu target on `node`, and the `musl_image` scenario asserts a musl
+one on `devcontainers/base:alpine`.
+
+Switching an existing container between the two is self-healing, because the two Bun builds have
+different filenames: the stale one is left in the cache and a correct one is downloaded beside it.
+It is only wasted bytes, but it does survive a rebuild when `persist-homedir` is in play.
+
+`postStart` rather than `postCreate` because the process dies with the container and has to come
+back with it — and it runs on every start, so it first probes `POST /about` and leaves an instance
+that is already answering alone. The CLI takes no project path and has no flag for one: it serves
+its working directory, which for a lifecycle hook is the workspace folder. That is also why this is
+not the feature's `entrypoint` — an entrypoint runs as root, from `/`, before the workspace matters.
+
+Startup goes to `/tmp/tidewave.log`, stamped with the command and time because the CLI itself is
+silent on a healthy run. Nothing in the start script exits non-zero: a bridge that failed to come up
+is worth shouting about in the creation log, not worth failing the container over.
+
 ## Publishing
 
 `.github/workflows/release.yaml` publishes on push to `main` when a feature's `version` in its
@@ -184,7 +255,21 @@ fixed set of git paths and asks you to create them once, rather than offering a 
 
 `containerEnv` is more limited still: it is emitted as a Dockerfile `ENV`, where `${localEnv:HOME}`
 is not substituted at all — Docker rejects it as an unsupported modifier — so a feature cannot learn
-the host's home path that way.
+the host's home path that way. That is what stops `tidewave` from setting `TIDEWAVE_HOST_PATH`
+itself, and the reason its project has to pass one through with `remoteEnv`.
+
+**A feature cannot open a port.** `forwardPorts`, `appPort` and `remoteEnv` are not in
+[the feature schema](https://github.com/devcontainers/spec/blob/main/schemas/devContainerFeature.schema.json)
+at all — the properties a feature gets are `containerEnv`, `mounts`, `entrypoint`, `init`,
+`privileged`, `capAdd`, `securityOpt`, `customizations`, `installsAfter`/`dependsOn` and the five
+lifecycle hooks. So `tidewave` can start a server but cannot publish it, and the project it is used
+in has to say `appPort` itself.
+
+**A lifecycle hook is a static string and gets no options.** Only `install.sh` ever sees an option
+value, so anything the runtime needs is baked into a generated file at build time — `tidewave`
+writes its flags to `/usr/local/share/nshafer-tidewave/config`, the way `persist-homedir` generates
+its entrypoint with the username already substituted. It also means a hook cannot be conditional:
+`autostart: false` cannot remove the `postStartCommand`, only make the script it names exit early.
 
 Beyond that, the ordering rules. `git-config` copies at `postCreateCommand`, because the host's
 files arrive as mounts and mounts do not exist during the build — which also means it re-runs on

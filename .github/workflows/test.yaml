@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        feature: [claude, git-config, persist-homedir]
+        feature: [claude, git-config, persist-homedir, tidewave]
     steps:
       - uses: actions/checkout@v7
 

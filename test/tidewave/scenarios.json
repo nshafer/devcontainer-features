@@ -1,0 +1,28 @@
+{
+  "custom_port": {
+    "image": "node",
+    "remoteUser": "node",
+    "features": {
+      "tidewave": {
+        "port": "9876",
+        "allowRemoteAccess": false
+      }
+    }
+  },
+  "no_autostart": {
+    "image": "node",
+    "remoteUser": "node",
+    "features": {
+      "tidewave": {
+        "autostart": false
+      }
+    }
+  },
+  "musl_image": {
+    "image": "mcr.microsoft.com/devcontainers/base:alpine",
+    "remoteUser": "vscode",
+    "features": {
+      "tidewave": {}
+    }
+  }
+}
