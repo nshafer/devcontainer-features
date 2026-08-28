@@ -175,8 +175,6 @@ username-aware, because `install.sh` runs with `_REMOTE_USER` and `_REMOTE_USER_
 a feature mounts must exist on every machine that uses it — which is why `git-config` mounts a small
 fixed set of git paths and asks you to create them once, rather than offering a configurable list.
 
-_Readonly mounts can use string or object form_ but both need to have type set to "bind,readonly".
-
 `containerEnv` is more limited still: it is emitted as a Dockerfile `ENV`, where `${localEnv:HOME}`
 is not substituted at all — Docker rejects it as an unsupported modifier — so a feature cannot learn
 the host's home path that way.

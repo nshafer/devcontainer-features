@@ -6,7 +6,11 @@
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/git-config",
   "options": {},
   "mounts": [
-    "source=${localEnv:HOME}/.config/git,target=/mnt/git-config,type=bind,readonly"
+    {
+      "source": "${localEnv:HOME}/.config/git",
+      "target": "/mnt/git-config",
+      "type": "bind,readonly"
+    }
   ],
   "postCreateCommand": "/usr/local/share/nshafer-git-config/post-create.sh",
   "installsAfter": [

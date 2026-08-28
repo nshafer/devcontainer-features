@@ -2,7 +2,7 @@
   "id": "claude",
   "version": "1.0.0",
   "name": "Claude Code (nshafer)",
-  "description": "Installs the Claude Code CLI with the native installer, and can seed ~/.claude/settings.json at build time. Nothing from the host's ~/.claude is mounted: credentials, transcripts and file history stay on the host, and each container logs in for itself.",
+  "description": "Installs the Claude Code CLI with the native installer, and can seed ~/.claude/settings.json at build time.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/claude",
   "options": {
     "version": {
