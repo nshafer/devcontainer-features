@@ -22,14 +22,21 @@ set -uo pipefail
 
 CONFIG=/usr/local/share/nshafer-sandbox/config
 # The defaults matter: the test suite drives this script directly, without the generated config.
+# USERNAME and USER_UID are read by nothing in here, but they are part of the config's contract --
+# install.sh writes them and the tests assert on them -- so they are declared with the rest rather
+# than leaving this block a partial picture of the file it mirrors.
 BLOCK_SSH=true
 BLOCK_GPG=true
 BLOCK_X11=true
 BLOCK_IPC=true
 SWEEP_INTERVAL=1
+# shellcheck disable=SC2034
 USERNAME=root
 USER_HOME=/root
+# shellcheck disable=SC2034
 USER_UID=0
+# Generated at build time, so there is nothing for the linter to follow here.
+# shellcheck source=/dev/null
 [ -r "$CONFIG" ] && . "$CONFIG"
 
 # Overridable so the tests can point all of this at a scratch tree instead of the real /tmp.
@@ -257,12 +264,14 @@ report() {
 
     echo "sandbox: forwarded host channels in this container"
 
-    # shellcheck disable=SC2086
+    # Word splitting is the point: each path has to arrive as a separate argument. SC2046 is the
+    # unquoted command substitution, SC2086 the unquoted $ROOTS inside it.
+    # shellcheck disable=SC2046,SC2086
     channel "ssh agent" "$BLOCK_SSH" \
         $(find $ROOTS -maxdepth 3 -type s -name 'vscode-ssh-auth-*.sock' 2>/dev/null)
     channel "gpg agent" "$BLOCK_GPG" "$GNUPG_DIR/S.gpg-agent"
     channel "x11 display" "$BLOCK_X11" "$X11_DIR"/X*
-    # shellcheck disable=SC2086
+    # shellcheck disable=SC2046,SC2086
     channel "vscode ipc" "$BLOCK_IPC" \
         $(find $ROOTS -maxdepth 3 -type s \
             \( -name 'vscode-ipc-*.sock' -o -name 'vscode-git-*.sock' \

@@ -12,8 +12,6 @@
 set -e
 source dev-container-features-test-lib
 
-SANDBOX=/usr/local/share/nshafer-sandbox
-
 sudo tee /usr/local/bin/sock-bind >/dev/null <<'PERL'
 #!/usr/bin/perl
 use strict; use Socket;

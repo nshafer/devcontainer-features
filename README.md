@@ -342,8 +342,15 @@ make test       # all of them, as CI runs them
 The `Makefile` exists because every run needs the same three things set correctly — the right CLI,
 a base image the feature can actually be exercised on, and the host paths its mounts expect — and
 none of them are the default. `QUICK=1` skips scenarios for an edit-run loop, `FILTER=<name>`
-narrows to one scenario, `ARGS=` passes anything else through. `make lint` checks shell syntax and
-JSON without starting a container.
+narrows to one scenario, `ARGS=` passes anything else through.
+
+`make lint` runs shellcheck, `bash -n` and a JSON parse in a couple of seconds without starting a
+container, and CI runs it as its own job. `src/` is linted with no exclusions — what ships is held
+to the stricter standard, and the few deliberate patterns in there carry inline directives with a
+reason next to each. The test scripts are linted with three checks off, all structural rather than
+sloppiness: `SC2016` (the `bash -c '...$VAR...'` idiom, where deferring expansion to the inner
+shell is the entire point), `SC1091` (the test lib only exists inside the container) and `SC2088`
+(a literal `~` inside a check's description string, which is prose, not a path).
 
 One trap it removes: on a machine with VS Code installed, the `devcontainer` on `PATH` is a wrapper
 that appends `--workspace-folder`, which `features test` rejects outright. The Makefile calls the

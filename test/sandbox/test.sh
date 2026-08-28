@@ -29,9 +29,6 @@ print "connected $ARGV[0]\n";
 PERL
 sudo chmod 0755 /usr/local/bin/sock-bind /usr/local/bin/sock-connect
 
-SANDBOX=/usr/local/share/nshafer-sandbox
-HOME_DIR="$HOME"
-
 check "the scripts and config landed" bash -c '
     test -x /usr/local/share/nshafer-sandbox/sandbox.sh
     test -x /usr/local/share/nshafer-sandbox/entrypoint.sh

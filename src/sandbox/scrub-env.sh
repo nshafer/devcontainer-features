@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Sourced, never executed. Unsets the variables that advertise the forwarded sockets.
 #
 # Be clear about what this is worth: it is the weakest of the three layers and it is not a control.

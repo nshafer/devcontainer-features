@@ -21,6 +21,8 @@ AUTOSTART=true
 PORT=9000
 ARGS="--port 9000 --allow-remote-access"
 CONFIG=/usr/local/share/nshafer-tidewave/config
+# Generated at build time, so there is nothing for the linter to follow here.
+# shellcheck source=/dev/null
 [ -r "$CONFIG" ] && . "$CONFIG"
 
 LOG="${TIDEWAVE_LOG:-/tmp/tidewave.log}"
@@ -52,6 +54,9 @@ fi
 if [ -z "${TIDEWAVE_HOST_PATH:-}" ]; then
     echo "==> tidewave: TIDEWAVE_HOST_PATH is not set, so 'open in editor' will hand the host"
     echo "    container paths. Add to devcontainer.json:"
+    # Printed verbatim: ${localEnv:...} is devcontainer.json syntax for the user to copy, not
+    # something this shell should expand.
+    # shellcheck disable=SC2016
     echo '      "remoteEnv": { "TIDEWAVE_HOST_PATH": "${localEnv:TIDEWAVE_HOST_PATH}" }'
 fi
 
@@ -66,9 +71,13 @@ echo "==> tidewave: starting in $PWD, logging to $LOG"
 
 # setsid puts it in its own session so it is not a child of the lifecycle shell the CLI is waiting
 # on; nohup alone covers images without util-linux.
+# $ARGS is unquoted on purpose: it is a flag string baked in at build time and has to split into
+# separate arguments.
 if command -v setsid >/dev/null 2>&1; then
+    # shellcheck disable=SC2086
     setsid nohup tidewave $ARGS >> "$LOG" 2>&1 < /dev/null &
 else
+    # shellcheck disable=SC2086
     nohup tidewave $ARGS >> "$LOG" 2>&1 < /dev/null &
 fi
 disown 2>/dev/null || true

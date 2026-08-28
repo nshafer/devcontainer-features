@@ -10,6 +10,20 @@ on:
   workflow_call:
 
 jobs:
+  # Seconds, no Docker, and it fails on the class of mistake that otherwise surfaces three minutes
+  # into an image build. Deliberately not a prerequisite of the matrix below: a lint finding should
+  # not hide a real test failure, so both run and both report.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Pinned to the runner's own shellcheck rather than installing one, so a new release cannot
+      # turn a green branch red on its own.
+      - name: Lint
+        # STRICT=1 so a runner image without shellcheck fails here rather than skipping the check
+        # and reporting green.
+        run: make lint STRICT=1
+
   test:
     runs-on: ubuntu-latest
     strategy:
