@@ -13,7 +13,7 @@ jobs:
       contents: write
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Publishes any feature whose version in devcontainer-feature.json is not already in the
       # registry, and regenerates each feature's README from its metadata.
