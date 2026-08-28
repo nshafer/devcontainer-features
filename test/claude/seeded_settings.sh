@@ -3,6 +3,7 @@ set -e
 source dev-container-features-test-lib
 
 check "claude runs" claude --version
+
 check "settings file was seeded" test -s "$HOME/.claude/settings.json"
 
 check "the seeded values are there" bash -c '
