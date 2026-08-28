@@ -8,6 +8,10 @@
 # ~/.gitconfig — requiring an empty ~/.gitconfig to exist on the host, the way a bind mount would,
 # silently switches off the entire git configuration of an XDG setup.
 #
+# The mount is read-write: a feature's mount objects take source, target and type only, and there is
+# no readonly among them. Nothing below writes to $SRC, and nothing below should ever start to — the
+# source is the host's own git directory, and a stray write there lands on the host.
+#
 # The files are copied whole, sections and all. Nothing is stripped on the way in: a filter driver
 # whose command is missing here is worth the hard failure it causes, because that failure is the
 # thing that tells you to install the tool in the container.

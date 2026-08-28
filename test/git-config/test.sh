@@ -4,7 +4,11 @@ source dev-container-features-test-lib
 
 # postCreateCommand does not run in this harness, so drive the copy directly. Assertions compare
 # against the mounted host files rather than hardcoding values, so they hold on any machine.
-# Nothing here writes to /mnt/git-config: that mount is the host's real git directory.
+# Nothing here writes to /mnt/git-config: that mount is the host's real git directory, and it is
+# mounted read-write because a feature's mount metadata has no way to say otherwise. Snapshot it
+# first so the run below can be held to that.
+before=$(find /mnt/git-config -type f -exec md5sum {} + | sort; find /mnt/git-config -exec stat -c '%n %Y %a' {} + | sort)
+
 /usr/local/share/nshafer-git-config/post-create.sh
 
 check "git is installed" git --version
@@ -54,6 +58,10 @@ check "unsets keys naming a program this container lacks, keeps the rest" bash -
     [ "$(g filter.lfs.required)" = true ] || { echo "lfs filter was stripped"; exit 1; }
     echo "$out" | grep -q "definitely-not-installed-xyz is not installed" || { echo "no reason given"; exit 1; }
     exit 0'
+
+check "leaves the host mount untouched" bash -c '
+    after=$(find /mnt/git-config -type f -exec md5sum {} + | sort; find /mnt/git-config -exec stat -c "%n %Y %a" {} + | sort)
+    [ "'"$before"'" = "$after" ] || { diff <(printf "%s\n" "'"$before"'") <(printf "%s\n" "$after"); exit 1; }'
 
 check "is idempotent" bash -c '
     a=$(md5sum < "$HOME/.config/git/config")

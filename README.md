@@ -92,14 +92,21 @@ predates a settings change will not see it until that volume is recreated.
 
 No options. On container create it copies, as the remote user:
 
-| From (host, read-only) | To (container, writable) |
-| ---------------------- | ------------------------ |
-| `~/.config/git/config` | `~/.config/git/config`   |
-| `~/.config/git/ignore` | `~/.config/git/ignore`   |
+| From (host)            | To (container)         |
+| ---------------------- | ---------------------- |
+| `~/.config/git/config` | `~/.config/git/config` |
+| `~/.config/git/ignore` | `~/.config/git/ignore` |
 
 One mount, `~/.config/git` → `/mnt/git-config`, so a global ignore file needs no `core.excludesfile`
 at all: `~/.config/git/ignore` is where git looks by default. Copies rather than links, so the
 container can adjust its own config without writing back to the host.
+
+That mount is read-write, and not by choice: a feature's `mounts` are objects with `source`,
+`target` and `type` only — `type` takes `bind` or `volume`, and there is nowhere to put `readonly`.
+The string form that would carry it is not what the feature schema accepts. So nothing but
+discipline keeps the host's git directory intact, and the discipline is: the feature only ever
+reads `/mnt/git-config`, the container's own git writes to `$HOME/.config/git`, and a test asserts
+the mount is byte-identical after a run.
 
 The files go in **whole** — every section, filters included. A filter driver whose command is not
 installed in the container is left to fail, because with `required = true` that failure is a hard
