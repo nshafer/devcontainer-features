@@ -304,6 +304,30 @@ check "the daemon seals a socket that appears after it started" bash -c '
     ls -l /tmp/vscode-ssh-auth-late-uuid.sock
     [ "$(stat -c %a /tmp/vscode-ssh-auth-late-uuid.sock)" = 0 ] || { echo "daemon did not catch it"; exit 1; }'
 
+# ---------------------------------------------------------------------------------------------
+# How fast the seal lands. This is the difference between a boundary and a formality: a socket that
+# stays usable for a whole second is usable about 14,000 times, which is 13,999 more than it takes
+# to have the host's ssh-agent sign something.
+# ---------------------------------------------------------------------------------------------
+
+check "inotify is available, so sealing is not left to the poll interval" bash -c '
+    command -v inotifywait >/dev/null || { echo "inotifywait missing; install.sh did not install it"; exit 1; }
+    grep -q "inotify" /var/log/nshafer-sandbox.log || { echo "daemon did not report inotify mode:"; \
+        cat /var/log/nshafer-sandbox.log; exit 1; }'
+
+check "a new socket is sealed in milliseconds, not on the next poll" bash -c '
+    sock-bind /tmp/vscode-ssh-auth-timing.sock
+    start=$(date +%s%N)
+    for _ in $(seq 1 200); do
+        [ "$(stat -c %a /tmp/vscode-ssh-auth-timing.sock 2>/dev/null)" = 0 ] && break
+        sleep 0.01
+    done
+    ms=$(( ($(date +%s%N) - start) / 1000000 ))
+    echo "  sealed after ${ms}ms"
+    [ "$(stat -c %a /tmp/vscode-ssh-auth-timing.sock)" = 0 ] || { echo "never sealed"; exit 1; }
+    # The poll backstop is 1000ms, so anything well under that proves inotify drove it.
+    [ "$ms" -lt 500 ] || { echo "took ${ms}ms -- that is the poll, not inotify"; exit 1; }'
+
 check "sandbox-report says every channel is blocked" bash -c '
     sandbox-report | tee /dev/stderr
     sandbox-report | grep -qE "ssh agent +blocked"

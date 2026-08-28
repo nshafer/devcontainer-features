@@ -87,6 +87,40 @@ tombstone() {
     return 0
 }
 
+# Undo what version 1.0.0 of this feature did, because it does not go away on its own.
+#
+# 1.0.0 sealed /tmp/.X11-unix and ~/.gnupg by making the *directories* root-owned and mode 0555.
+# That stops VS Code attaching (see block_fixed below), and 1.0.1 stopped doing it -- but stopping
+# is not enough. persist-homedir puts /home on a named volume, so a ~/.gnupg that 1.0.0 sealed
+# survives every rebuild, and the container it breaks stays broken no matter how new the feature
+# is. The symptom is the helper failing where it must be able to write:
+#
+#   Container server: [Error: EACCES: permission denied, unlink '/home/<user>/.gnupg/S.gpg-agent']
+#
+# Only ever hands a directory back to the remote user, and only one this feature could have taken:
+# root-owned, at a path this feature manages. A ~/.gnupg owned by root is never something the user
+# set up deliberately.
+repair_dir() {
+    local dir="$1" mode="$2"
+
+    [ -d "$dir" ] || return 0
+    is_mount "$dir" && return 0
+    [ "$USERNAME" != root ] || return 0
+    [ "$(stat -c %u "$dir" 2>/dev/null)" = "0" ] || return 0
+
+    chown "$USERNAME:" "$dir" 2>/dev/null || return 0
+    chmod "$mode" "$dir" 2>/dev/null || return 0
+    log "repaired $dir -- it was root-owned, which stops VS Code attaching (1.0.0 left it that way)"
+}
+
+# The sockets inside are left sealed on purpose: with the directory handed back, the remote user can
+# unlink them, which is exactly what VS Code's helper does before it re-binds. The sweeper takes the
+# new ones a moment later.
+repair() {
+    repair_dir "$X11_DIR" 0755
+    repair_dir "$GNUPG_DIR" 0700
+}
+
 # The fixed-name channels: /tmp/.X11-unix/X<n> and ~/.gnupg/S.gpg-agent.
 #
 # An earlier version of this took the *directories* instead -- root-owned, mode 0555 -- so the
@@ -294,9 +328,68 @@ report() {
     [ "$open" -eq 0 ]
 }
 
+# The sweeper.
+#
+# Polling alone leaves a window that is far too wide to call a boundary. Measured against a socket
+# forwarded exactly the way VS Code forwards one, with a one-second interval, an attacker looping on
+# connect() got 13,959 successful connections over 935ms before the seal landed. One is enough to
+# have the host's ssh-agent sign something. So the poll is the backstop, not the mechanism:
+# inotify is what closes most of that gap, sealing on the kernel's create event rather than up to a
+# whole interval later.
+#
+# It does not close the gap completely and nothing available in here can -- see the README. The
+# socket has to be allowed to exist or the container cannot be attached to, and between the helper's
+# bind() and this seal there is always some window. inotify makes it roughly a millisecond instead
+# of a second; it does not make it zero.
+INOTIFY="$(command -v inotifywait 2>/dev/null || true)"
+WATCH_DIRS=""
+
+# Only the directories that exist: inotifywait fails on a missing one, and ~/.gnupg and
+# /tmp/.X11-unix are both created by VS Code partway through attaching.
+watch_dirs_now() {
+    local dir out=""
+    for dir in /tmp "$X11_DIR" "$GNUPG_DIR" "/tmp/user/$USER_UID" "/run/user/$USER_UID"; do
+        [ -d "$dir" ] && out="$out $dir"
+    done
+    echo "$out"
+}
+
+start_watcher() {
+    [ -n "$INOTIFY" ] || return 0
+    WATCH_DIRS="$1"
+    [ -n "${WATCH_DIRS// /}" ] || return 0
+
+    # Matched on its own command line rather than tracked by pid, because killing the subshell that
+    # reads from it would otherwise leave inotifywait orphaned on a dead pipe.
+    pkill -f 'inotifywait -m -q -e create' 2>/dev/null || true
+
+    # shellcheck disable=SC2086
+    (
+        "$INOTIFY" -m -q -e create -e moved_to $WATCH_DIRS 2>/dev/null | while read -r _; do
+            sweep >/dev/null 2>&1
+        done
+    ) &
+}
+
 daemon() {
-    log "sweeper started as $(whoami), sweeping every ${SWEEP_INTERVAL}s"
+    if [ -n "$INOTIFY" ]; then
+        log "sweeper started as $(whoami): inotify, with a ${SWEEP_INTERVAL}s poll as backstop"
+    else
+        warn "inotifywait is not installed, so sealing waits for the next poll -- up to"
+        warn "  ${SWEEP_INTERVAL}s during which a forwarded socket is usable. Install inotify-tools."
+    fi
+
+    trap 'pkill -f "inotifywait -m -q -e create" 2>/dev/null; exit 0' TERM INT
+
     while true; do
+        # VS Code creates ~/.gnupg and /tmp/.X11-unix while attaching, so the set of watchable
+        # directories grows after this loop starts. Re-arm whenever it changes.
+        local now
+        now="$(watch_dirs_now)"
+        if [ "$now" != "$WATCH_DIRS" ]; then
+            start_watcher "$now"
+        fi
+
         sweep >/dev/null 2>&1
         sleep "$SWEEP_INTERVAL"
     done
@@ -304,9 +397,10 @@ daemon() {
 
 case "${1:-sweep}" in
     block-fixed)    block_fixed ;;
+    repair)         repair ;;
     sweep)          block_fixed; sweep ;;
     daemon)         daemon ;;
     report)         report ;;
     check-manifest) check_manifest "${2:-$$}" ;;
-    *)              echo "usage: sandbox.sh {block-fixed|sweep|daemon|report|check-manifest}" >&2; exit 2 ;;
+    *)              echo "usage: sandbox.sh {repair|block-fixed|sweep|daemon|report|check-manifest}" >&2; exit 2 ;;
 esac

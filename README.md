@@ -9,7 +9,7 @@ copy-pasted into every project's `devcontainer.json`.
 | [`claude`](src/claude)                   | Installs the Claude Code CLI and copies the host's `~/.claude/settings.json` into the container.  |
 | [`git-config`](src/git-config)           | Copies the host's git config and excludes file into the container.                                |
 | [`persist-homedir`](src/persist-homedir) | Keeps `/home` on a per-project named volume across rebuilds, minus the VS Code server/extensions. |
-| [`sandbox`](src/sandbox)                 | Cuts the host sockets VS Code forwards in — SSH agent, GPG agent, X11, VS Code IPC.                |
+| [`sandbox`](src/sandbox)                 | Seals the host sockets VS Code forwards in — SSH agent, GPG agent, X11, VS Code IPC.               |
 | [`tidewave`](src/tidewave)               | Installs the Tidewave CLI and starts it on every container start.                                 |
 
 ## Use them everywhere
@@ -169,6 +169,57 @@ not assumed — the extension writes the list into `REMOTE_CONTAINERS_SOCKETS` i
 | extension IPC | `vscode-remote-containers-ipc-<uuid>.sock` | the extension's own channel to the host |
 | Wayland | `/tmp/vscode-wayland-<uuid>.sock` | your desktop — **a bind mount**, see below |
 
+### What this actually buys you — read this first
+
+**This is mitigation, not a boundary.** It makes the forwarded channels difficult to reach by
+accident and awkward to reach on purpose. It does not make them unreachable, and nothing installed
+*inside* the container can, because the hole is in how VS Code forwards them.
+
+The reason is structural. VS Code's helper runs **as the remote user** and calls
+`net.Server.listen()` on a socket inside the container; anything else running as that user may
+`connect()` to it. The socket has to be allowed to exist, because a path the helper cannot write is
+a container you cannot attach to — that is not a theory, it is what `1.0.0` did:
+
+```
+Container server: Error: listen EACCES: permission denied /tmp/.X11-unix/X0
+    at async Promise.all (index 1)
+```
+
+So the socket appears, and this feature takes it. Between those two moments it is live and usable.
+Measured against a socket forwarded exactly the way VS Code forwards one, with an attacker looping
+on `connect()`:
+
+| sealing driven by | usable connections before the seal | window |
+| --- | --- | --- |
+| the 1s poll alone | 15,299 | 993 ms |
+| inotify (the default) | **7** | **5 ms** |
+
+inotify is a ~2,000× reduction and it is why the feature installs `inotify-tools`. It is still not
+zero, and **one connection is enough** to have your host's `ssh-agent` sign something. The window
+reopens on every window you attach, not just the first.
+
+What it *does* hold: once sealed, a UUID-named socket is closed for good — `/tmp` is sticky and a
+root-owned file in it cannot be removed by the remote user at all. Recreating one gets you a socket
+bound to your own process with nothing behind it, because the forwarding lives in the helper
+process, not in the file. So opportunistic use, tools that stumble onto `SSH_AUTH_SOCK`, and an
+agent that is not specifically racing the seal all fail.
+
+**The only fixes that actually close it are outside this feature:**
+
+- **Don't forward at all.** Unset `SSH_AUTH_SOCK` and `DISPLAY` in the environment VS Code is
+  launched from, and set `"dev.containers.mountWaylandSocket": false`. Nothing is forwarded, so
+  there is nothing to race.
+- **Run the agent as a different Unix user** than the remote user. Forwarded sockets are
+  `srwxrwxr-x`, and connecting to a Unix socket needs *write* permission, which `other` does not
+  have — verified: a second user is refused even on a completely unsealed socket. No window, no
+  race, nothing to seal.
+- **Upstream.** Until the Dev Containers extension offers a way to decline forwarding per container
+  — or forwards to something more restrictive than a world-reachable, same-uid socket — a feature
+  installed inside the container is always acting after the fact.
+
+Treat this as a seatbelt for a coding agent doing something careless, not armour against one that
+has been told to go looking.
+
 The feature closes them with three mechanisms, in descending order of how much they are worth.
 
 **Sealing beats deleting.** The obvious move is to delete the sockets, but deleting frees the path
@@ -197,6 +248,18 @@ unlinked by the user who owns that directory, so the fixed-name channels — X11
 for at most one sweep interval rather than never. The UUID-named channels keep the stronger
 guarantee, because `/tmp` is sticky and a root-owned file in it cannot be removed by the user at
 all.
+
+**If you ran `1.0.0`, it left damage that outlives the rebuild.** That version made
+`/tmp/.X11-unix` and `~/.gnupg` root-owned, and `persist-homedir` keeps `/home` on a named volume —
+so a sealed `~/.gnupg` survives every rebuild and keeps the container unattachable, with a new
+symptom:
+
+```
+Container server: [Error: EACCES: permission denied, unlink '/home/<user>/.gnupg/S.gpg-agent']
+```
+
+`1.0.2` repairs it at container start: any directory it manages that is root-owned is handed back to
+the remote user. Recreating the home volume works too, at the cost of everything else in it.
 
 **The rest needs a daemon, not a bounded loop.** The remaining names carry a fresh UUID per window,
 so every VS Code window you attach forwards a whole new set — hours after the first. A loop that

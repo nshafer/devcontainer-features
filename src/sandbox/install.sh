@@ -42,6 +42,25 @@ if [ "$USERNAME" = "root" ]; then
     echo "!!!   chmod any tombstone back. Set remoteUser to a non-root user." >&2
 fi
 
+# The sweeper works without this -- it falls back to the poll interval -- but the gap between a
+# forwarded socket appearing and being sealed then runs to a whole second, which measured out at
+# ~14,000 usable connections. inotify takes that to roughly a millisecond. Not fatal if the package
+# is unavailable, so a failure here is a warning rather than a failed build.
+if ! command -v inotifywait >/dev/null 2>&1; then
+    echo "==> sandbox: installing inotify-tools"
+    if command -v apt-get >/dev/null 2>&1; then
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update -y && apt-get install -y --no-install-recommends inotify-tools \
+            || echo "!!! sandbox: could not install inotify-tools; sealing falls back to polling" >&2
+        rm -rf /var/lib/apt/lists/*
+    elif command -v apk >/dev/null 2>&1; then
+        apk add --no-cache inotify-tools \
+            || echo "!!! sandbox: could not install inotify-tools; sealing falls back to polling" >&2
+    else
+        echo "!!! sandbox: no known package manager; sealing falls back to polling" >&2
+    fi
+fi
+
 install -d "$SHARE_DIR"
 install -m 0755 sandbox.sh "$SHARE_DIR/sandbox.sh"
 install -m 0755 entrypoint.sh "$SHARE_DIR/entrypoint.sh"

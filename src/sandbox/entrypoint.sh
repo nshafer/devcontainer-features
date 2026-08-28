@@ -20,6 +20,10 @@ LOG=/var/log/nshafer-sandbox.log
 
 {
     echo "=== sandbox entrypoint $(date -Is)"
+    # Repair first, and before anything else touches these paths: a directory an older version of
+    # this feature sealed will stop VS Code attaching at all, and the persisted home volume means
+    # it outlives the rebuild that was supposed to fix it.
+    "$SHARE_DIR/sandbox.sh" repair
     "$SHARE_DIR/sandbox.sh" block-fixed
 } >> "$LOG" 2>&1 || true
 

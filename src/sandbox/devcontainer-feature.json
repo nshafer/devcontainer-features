@@ -1,8 +1,8 @@
 {
   "id": "sandbox",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "name": "Sandbox (nshafer)",
-  "description": "Cuts the host sockets VS Code forwards into a dev container - SSH agent, GPG agent, X11 and the VS Code IPC channels - so a coding agent running inside cannot sign with your keys, spend your GitHub token or reach your desktop.",
+  "description": "Seals the host sockets VS Code forwards into a dev container - SSH agent, GPG agent, X11 and the VS Code IPC channels - so a coding agent running inside cannot casually sign with your keys, spend your GitHub token or reach your desktop. Mitigation, not a boundary: the socket must exist for the container to attach, so there is a short window at each attach. See the README.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/sandbox",
   "options": {
     "blockSshAgent": {
@@ -37,7 +37,7 @@
         "1",
         "5"
       ],
-      "description": "Seconds between sweeps by the root daemon. Each sweep is one find over /tmp and /run."
+      "description": "Seconds between backstop sweeps. Sealing is normally driven by inotify, within about a millisecond of a socket appearing; this poll only catches what inotify missed, so it rarely needs changing."
     }
   },
   "entrypoint": "/usr/local/share/nshafer-sandbox/entrypoint.sh",
