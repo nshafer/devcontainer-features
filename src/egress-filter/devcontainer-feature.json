@@ -1,6 +1,6 @@
 {
   "id": "egress-filter",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "name": "Egress filter (nshafer)",
   "description": "Default-deny outbound networking, with a hostname allowlist merged from a global list on the host, a per-project list in the repo, and a baseline that keeps VS Code working. Enforced by an in-container firewall, so an agent that ignores HTTP_PROXY simply cannot connect.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/egress-filter",
@@ -39,7 +39,12 @@
     "allowDns": {
       "type": "boolean",
       "default": true,
-      "description": "Let the container resolve names directly. Turning this off closes a slow exfiltration channel but breaks anything that resolves for itself - git, package managers, most clients. See the README."
+      "description": "Let the container resolve names directly, against the resolvers in dnsServers only - port 53 to any other host is refused by the firewall. Turning this off closes the remaining slow exfiltration channel but breaks anything that resolves for itself - git, package managers, most clients. See the README."
+    },
+    "dnsServers": {
+      "type": "string",
+      "default": "",
+      "description": "IPv4 addresses or CIDRs that port 53 may be opened to, comma separated. Empty means the nameservers the container runtime put in /etc/resolv.conf, which is what would have been used anyway. Only consulted when allowDns is on."
     },
     "proxyPort": {
       "type": "string",

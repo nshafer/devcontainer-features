@@ -4,8 +4,9 @@
 # The split matters. HTTP_PROXY is advisory -- an agent that ignores it is not filtered at all -- so
 # the env var is a convenience and the firewall is the control:
 #
-#   OUTPUT: loopback, established, DNS, and anything owned by the proxy's uid.  Everything else
-#           REJECTed. The agent has no route off the machine except through the proxy.
+#   OUTPUT: loopback, established, DNS *to the container's own resolvers*, and anything owned by
+#           the proxy's uid.  Everything else REJECTed. The agent has no route off the machine
+#           except through the proxy.
 #
 # The proxy then decides by hostname, taken from the CONNECT request, so lists are domains rather
 # than addresses and there is no TLS interception and no CA to install. That last part is why this
@@ -26,6 +27,7 @@ BASELINE=true
 PROJECT_ALLOWLIST="/workspaces/*/.devcontainer/egress-allow.txt"
 PRESETS=""
 ALLOW_DNS=true
+DNS_SERVERS=""
 PROXY_PORT=3128
 PROXY_USER=egressfilter
 USERNAME=root
@@ -37,6 +39,7 @@ GLOBAL_LIST="${EGRESS_GLOBAL_LIST:-/mnt/egress-filter/allowlist.txt}"  # read-on
 # Overridable after the config is sourced, the same way GLOBAL_LIST is, so the preset
 # merge can be exercised without rebuilding the image.
 PRESETS="${EGRESS_PRESETS:-$PRESETS}"
+DNS_SERVERS="${EGRESS_DNS_SERVERS:-$DNS_SERVERS}"
 FILTER_FILE=/etc/nshafer-egress-filter/allow.regex
 PROXY_CONF=/etc/nshafer-egress-filter/tinyproxy.conf
 SOURCES_FILE=/etc/nshafer-egress-filter/sources.txt
@@ -213,10 +216,52 @@ reload_proxy() {
     kill -HUP "$pid" 2>/dev/null && log "proxy reloaded its allowlist"
 }
 
+# Which addresses port 53 may be opened to. One per line, IPv4 only.
+#
+# Allowing port 53 and leaving the destination open is not "the container can resolve names", it is
+# "the container can speak to any nameserver on the internet". That is a general-purpose tunnel:
+# iodine, dnscat, and plain TXT-record smuggling all need nothing more than a route to a resolver
+# the other end controls, and they get one for free from a blanket --dport 53 ACCEPT. Pinning the
+# destination leaves recursion through the *configured* resolvers -- slower, and visible in the
+# resolver's own logs -- and takes the direct channel away.
+#
+# The list is the dnsServers option if it was set, and otherwise whatever the container runtime put
+# in /etc/resolv.conf, which is the set that was already going to be used. Snapshotted when the
+# rules are applied rather than looked up per packet: resolv.conf is written before the entrypoint
+# runs and does not change under a running container, and anyone who could rewrite it later is root
+# and could have flushed the chain instead.
+#
+# A resolver on loopback -- Docker's embedded 127.0.0.11, systemd-resolved's 127.0.0.53 -- is
+# already covered by the -o lo rule and is reachable whether or not it appears here. That is not a
+# gap: loopback goes nowhere, and the forwarder behind it decides its own upstreams.
+dns_resolvers() {
+    local raw ns
+    if [ -n "$DNS_SERVERS" ]; then
+        raw="$(echo "$DNS_SERVERS" | tr ',' '\n')"
+    else
+        raw="$(awk '$1 == "nameserver" { print $2 }' /etc/resolv.conf 2>/dev/null)"
+    fi
+    while IFS= read -r ns; do
+        ns="$(echo "$ns" | tr -d '[:space:]')"
+        [ -n "$ns" ] || continue
+        case "$ns" in
+            # The chain is iptables, so a v6 resolver cannot be expressed in it. Named rather than
+            # dropped silently, because the symptom -- resolution simply not working -- gives no
+            # hint that a line in resolv.conf was skipped.
+            *:*) warn "ignoring IPv6 resolver $ns: this firewall is IPv4 only" ; continue ;;
+        esac
+        if echo "$ns" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$'; then
+            echo "$ns"
+        else
+            warn "ignoring resolver '$ns': not an IPv4 address or CIDR"
+        fi
+    done <<< "$raw"
+}
+
 # Rules are idempotent: the chain is flushed first, so a restart or a reload cannot stack duplicates
 # or leave a half-applied policy.
 apply_firewall() {
-    local uid
+    local uid ns resolvers pinned=""
     uid="$(id -u "$PROXY_USER" 2>/dev/null)" || { warn "no $PROXY_USER user; refusing to firewall"; return 1; }
 
     iptables -F NSHAFER_EGRESS 2>/dev/null || iptables -N NSHAFER_EGRESS 2>/dev/null
@@ -224,24 +269,43 @@ apply_firewall() {
 
     iptables -A NSHAFER_EGRESS -o lo -j ACCEPT
     iptables -A NSHAFER_EGRESS -m state --state ESTABLISHED,RELATED -j ACCEPT
+    # Per resolver, not per port: everything else on 53 falls through to the REJECT below.
     if [ "$ALLOW_DNS" = true ]; then
-        iptables -A NSHAFER_EGRESS -p udp --dport 53 -j ACCEPT
-        iptables -A NSHAFER_EGRESS -p tcp --dport 53 -j ACCEPT
+        resolvers="$(dns_resolvers)"
+        while IFS= read -r ns; do
+            [ -n "$ns" ] || continue
+            if iptables -A NSHAFER_EGRESS -p udp --dport 53 -d "$ns" -j ACCEPT 2>/dev/null &&
+               iptables -A NSHAFER_EGRESS -p tcp --dport 53 -d "$ns" -j ACCEPT 2>/dev/null; then
+                pinned="${pinned:+$pinned }$ns"
+            else
+                warn "iptables refused a DNS rule for $ns; queries to it will be blocked"
+            fi
+        done <<< "$resolvers"
+        if [ -z "$pinned" ]; then
+            warn "allowDns is on but no usable resolver was found, so name resolution will fail."
+            warn "  Set the dnsServers option, or set allowDns=false to mean it deliberately."
+        fi
     fi
     # The one route out. Everything the agent runs is some other uid, so it lands on the REJECT.
+    # Above the DNS rules in effect, not in order: the proxy resolves server-side for the hosts it
+    # is allowed to reach, and restricting it too would break allowDns=false, where resolving on
+    # the container's behalf is the entire point.
     iptables -A NSHAFER_EGRESS -m owner --uid-owner "$uid" -j ACCEPT
     iptables -A NSHAFER_EGRESS -j REJECT --reject-with icmp-port-unreachable
 
     iptables -A OUTPUT -j NSHAFER_EGRESS
-    echo applied > "$STATE_FILE" 2>/dev/null; chmod 0644 "$STATE_FILE" 2>/dev/null
-    log "firewall applied: default deny, out via uid $uid only, dns=$ALLOW_DNS"
+    # Line 1 is the marker, line 2 the resolvers that were actually pinned. Two lines rather than
+    # one because status has to answer both questions and cannot query iptables without root.
+    { echo applied; echo "$pinned"; } > "$STATE_FILE" 2>/dev/null
+    chmod 0644 "$STATE_FILE" 2>/dev/null
+    log "firewall applied: default deny, out via uid $uid only, dns=${pinned:-none}"
 }
 
 flush_firewall() {
     iptables -D OUTPUT -j NSHAFER_EGRESS 2>/dev/null
     iptables -F NSHAFER_EGRESS 2>/dev/null
     iptables -X NSHAFER_EGRESS 2>/dev/null
-    echo absent > "$STATE_FILE" 2>/dev/null
+    { echo absent; echo; } > "$STATE_FILE" 2>/dev/null
     log "firewall removed"
 }
 
@@ -278,16 +342,35 @@ status() {
     # iptables cannot be queried without root, and this runs as the remote user, so asking it
     # directly reports "not applied" on a perfectly good firewall. Root gets the authoritative
     # answer; everyone else reads the marker the entrypoint left.
+    local applied=no ns
     if [ "$(id -u)" = 0 ]; then
-        if iptables -C OUTPUT -j NSHAFER_EGRESS 2>/dev/null; then
-            printf '  %-14s default deny, dns=%s\n' "firewall" "$ALLOW_DNS"
-        else
-            printf '  %-14s NOT APPLIED -- egress is unrestricted\n' "firewall"
-        fi
-    elif [ "$(cat "$STATE_FILE" 2>/dev/null)" = applied ]; then
+        iptables -C OUTPUT -j NSHAFER_EGRESS 2>/dev/null && applied=yes
+    elif [ "$(head -1 "$STATE_FILE" 2>/dev/null)" = applied ]; then
+        applied=yes
+    fi
+    if [ "$applied" = yes ]; then
         printf '  %-14s default deny, dns=%s\n' "firewall" "$ALLOW_DNS"
     else
         printf '  %-14s NOT APPLIED -- egress is unrestricted\n' "firewall"
+    fi
+
+    # What port 53 may be opened to, which is a separate question from whether DNS is on at all.
+    if [ "$ALLOW_DNS" != true ]; then
+        printf '  %-14s blocked (allowDns=false); the proxy resolves instead\n' "dns"
+    else
+        if [ "$applied" = yes ]; then
+            # What was pinned, not what would be. The two differ exactly when it matters: a
+            # resolver iptables refused leaves the firewall up and DNS dead, and reading
+            # resolv.conf here would report that container as fine.
+            ns="$(sed -n 2p "$STATE_FILE" 2>/dev/null)"
+        else
+            ns="$(dns_resolvers 2>/dev/null | paste -sd' ' -)"
+        fi
+        if [ -n "$ns" ]; then
+            printf '  %-14s port 53 to %s only\n' "dns" "$ns"
+        else
+            printf '  %-14s NO RESOLVER -- name resolution will fail\n' "dns"
+        fi
     fi
 
     printf '  %-14s %s patterns\n' "allowlist" "$( [ -r "$FILTER_FILE" ] && wc -l < "$FILTER_FILE" || echo 0 )"

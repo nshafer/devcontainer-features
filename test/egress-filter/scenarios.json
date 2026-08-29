@@ -20,5 +20,15 @@
         "presets": "debian,npm,go"
       }
     }
+  },
+  "pinned-dns": {
+    "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+    "remoteUser": "node",
+    "features": {
+      "egress-filter": {
+        "allow": "example.com",
+        "dnsServers": "192.0.2.53"
+      }
+    }
   }
 }

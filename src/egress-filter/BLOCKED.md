@@ -14,6 +14,11 @@ The error is almost always a bare 403 from the proxy, and most tools describe it
 | `curl` (http) | an HTML page titled *Blocked by egress-filter* |
 | `git` | `fatal: unable to access '...': CONNECT tunnel failed, response 403` |
 | `npm` | `npm error 403 ... Filtered`, followed by advice about forbidden package versions |
+| `dig @8.8.8.8`, `nslookup ... 1.1.1.1` | a timeout, or `connection refused` |
+
+DNS is its own case. Names still resolve, but only through the resolvers in `/etc/resolv.conf`:
+port 53 to any other address is refused at the firewall, so pointing a lookup at a public resolver
+fails even though ordinary resolution works. `egress-status` prints the resolvers that are allowed.
 
 npm's message is misleading: it is not a version problem, a registry problem, or a credentials
 problem. If a request fails with 403 and you did not expect an authorisation error, run
@@ -29,6 +34,9 @@ exists to prevent. Specifically, none of these will help:
 - a different mirror, registry, proxy or CDN
 - `npm config set strict-ssl false`, `GIT_SSL_NO_VERIFY`, `curl -k` — the block is not a TLS
   failure, and turning off certificate checking makes things worse for no gain
+- querying a different nameserver — `dig @1.1.1.1`, setting `DNS_SERVER`, editing
+  `/etc/resolv.conf` — the firewall pins port 53 to the resolvers this container was given, and
+  a name resolving does not mean the host behind it is reachable anyway
 - editing `.devcontainer/egress-allow.txt` yourself — it is read once at container start and is not
   re-read while the container runs, so this changes nothing until someone restarts it
 

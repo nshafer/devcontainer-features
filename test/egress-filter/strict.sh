@@ -32,6 +32,11 @@ check "allowDns=false blocks the agent resolving for itself" bash -c '
         && { echo "DNS still works despite allowDns=false"; exit 1; }
     echo "  resolution refused, as configured"'
 
+check "allowDns=false leaves no accept on port 53 in the chain" bash -c '
+    sudo -n iptables -S NSHAFER_EGRESS | grep -- "--dport 53" | grep -q ACCEPT \
+        && { echo "port 53 is accepted despite allowDns=false"; exit 1; }
+    egress-status | tee /dev/stderr | grep -q "dns .*blocked (allowDns=false)"'
+
 # ...but the proxy resolves server-side, so allowed hosts still work without local DNS. That is the
 # trade the README describes: the side channel closes, and anything resolving for itself breaks.
 check "the proxy still reaches allowed hosts without local DNS" bash -c '

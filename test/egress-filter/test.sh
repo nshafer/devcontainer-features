@@ -83,6 +83,37 @@ check "ignoring HTTP_PROXY does not get you out" bash -c '
 check "DNS still resolves, as configured" bash -c '
     getent hosts example.com >/dev/null || { echo "resolution broken"; exit 1; }'
 
+# Port 53 is the one hole a default-deny egress filter has to leave open, and open to *any*
+# destination it is not a hole but a transport: iodine and dnscat need nothing more than a route to
+# a nameserver the other end controls. So the accepts name a destination, and the destinations are
+# the resolvers this container was actually given.
+check "port 53 is pinned to the resolvers this container was given" bash -c '
+    rules=$(sudo -n iptables -S NSHAFER_EGRESS)
+    dns=$(echo "$rules" | grep -- "--dport 53" || true)
+    echo "$dns" | sed "s/^/  /"
+    [ -n "$dns" ] || { echo "no DNS rules at all"; exit 1; }
+    open=$(echo "$dns" | grep -- "-j ACCEPT" | grep -cv -- " -d " || true)
+    [ "$open" = 0 ] || { echo "$open DNS accepts with no destination -- 53 is open to the world"; exit 1; }
+    for ns in $(sed -n "s/^nameserver  *//p" /etc/resolv.conf); do
+        case "$ns" in *:*) continue ;; esac
+        echo "$dns" | grep -q -- " -d $ns" || { echo "resolver $ns was not pinned"; exit 1; }
+    done
+    echo "  every accept on 53 carries a destination"'
+
+# The same property from the other side of the firewall. Skips a resolver that happens to be ours,
+# and passes vacuously with no internet, which is the right way round for a negative test.
+check "a nameserver that is not one of ours cannot be reached on 53" bash -c '
+    for ns in 8.8.8.8 1.1.1.1; do
+        grep -q "nameserver $ns" /etc/resolv.conf && continue
+        if timeout 5 bash -c "exec 3<>/dev/tcp/$ns/53" 2>/dev/null; then
+            echo "  opened tcp/53 to $ns -- DNS is a way out of here"; exit 1
+        fi
+        echo "  $ns refused on 53, as it must be"
+    done'
+
+check "egress-status says what port 53 may reach" bash -c '
+    egress-status | tee /dev/stderr | grep -q "port 53 to "'
+
 check "the project list is reported as a source once it exists" bash -c '
     egress-status | tee /dev/stderr | grep -q "project:  /workspaces"'
 

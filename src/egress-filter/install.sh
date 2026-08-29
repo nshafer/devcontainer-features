@@ -13,6 +13,7 @@ DENY="${DENY:-}"
 BASELINE="${BASELINE:-true}"
 PROJECT_ALLOWLIST="${PROJECTALLOWLIST:-/workspaces/*/.devcontainer/egress-allow.txt}"
 ALLOW_DNS="${ALLOWDNS:-true}"
+DNS_SERVERS="${DNSSERVERS:-}"
 PROXY_PORT="${PROXYPORT:-3128}"
 
 SHARE_DIR=/usr/local/share/nshafer-egress-filter
@@ -33,7 +34,18 @@ case "$PROXY_PORT" in
         ;;
 esac
 
-echo "==> egress-filter: baseline=$BASELINE presets=${PRESETS:-none} dns=$ALLOW_DNS port=$PROXY_PORT"
+# Shape-checked here as well as at container start, so a typo fails the build rather than quietly
+# costing you name resolution in a container that otherwise looks fine. Addresses only: this ends
+# up as an iptables -d, and a hostname would have to be resolved to be used, which is circular.
+for ns in $(echo "$DNS_SERVERS" | tr ',' ' '); do
+    if ! echo "$ns" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$'; then
+        echo "!!! egress-filter: dnsServers takes IPv4 addresses or CIDRs. Received: $ns" >&2
+        exit 1
+    fi
+done
+
+echo "==> egress-filter: baseline=$BASELINE presets=${PRESETS:-none} dns=$ALLOW_DNS" \
+     "resolvers=${DNS_SERVERS:-from /etc/resolv.conf} port=$PROXY_PORT"
 
 # Installing the feature is what turns filtering on -- there is no enabled option, because not
 # wanting a default-deny network is expressed by not adding the feature.
@@ -88,6 +100,7 @@ DENY="$DENY"
 BASELINE=$BASELINE
 PROJECT_ALLOWLIST="$PROJECT_ALLOWLIST"
 ALLOW_DNS=$ALLOW_DNS
+DNS_SERVERS="$DNS_SERVERS"
 PROXY_PORT=$PROXY_PORT
 PROXY_USER=$PROXY_USER
 USERNAME=$USERNAME
