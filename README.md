@@ -309,14 +309,14 @@ Two that are easy to get wrong and are handled in the presets: `go` needs the *s
 well as the proxy, because `GOPROXY` ends in `,direct`; and `docker` needs three hosts, since
 missing the CDN fails only *after* authenticating.
 
-**`/etc/nshafer-egress-filter/allowlist.txt` shows exactly what applied.** `allow.regex` is what the
+**`/etc/devcontainer/egress-filter/allowlist.txt` shows exactly what applied.** `allow.regex` is what the
 proxy reads and is unreadable at a glance — anchored, escaped, sorted, with no trace of where any
 line came from. The concatenated file is the same content before that transformation, every source
 in merge order behind a header, with each source's own comments intact:
 
 ```
 # ============================================================================
-# preset 'go': /usr/local/share/nshafer-egress-filter/presets/go.txt
+# preset 'go': /usr/local/share/devcontainer/egress-filter/presets/go.txt
 # ============================================================================
 # Go modules. Verified with `go env GOPROXY GOSUMDB`.
 proxy.golang.org
@@ -369,7 +369,7 @@ can work and the last of which is harmful. So three things carry the explanation
 
 - the proxy's 403 page names the feature, the refused host and the remedy (plain HTTP, and anything
   that surfaces the body — npm included)
-- `/usr/local/share/nshafer-egress-filter/BLOCKED.md` says the same at length, tool-agnostic,
+- `/usr/local/share/devcontainer/egress-filter/BLOCKED.md` says the same at length, tool-agnostic,
   and is pointed at from the postAttach output
 - the same text is installed as a Claude skill at `~/.claude/skills/egress-filter/SKILL.md`, written
   at *container start* rather than build time, because `persist-homedir` masks anything the image
@@ -807,7 +807,7 @@ in has to say `appPort` itself.
 
 **A lifecycle hook is a static string and gets no options.** Only `install.sh` ever sees an option
 value, so anything the runtime needs is baked into a generated file at build time — `tidewave`
-writes its flags to `/usr/local/share/nshafer-tidewave/config`, the way `persist-homedir` generates
+writes its flags to `/usr/local/share/devcontainer/tidewave/config`, the way `persist-homedir` generates
 its entrypoint with the username already substituted. It also means a hook cannot be conditional:
 `autostart: false` cannot remove the `postStartCommand`, only make the script it names exit early.
 
@@ -821,7 +821,7 @@ install.
 result is the layout the CLI's own updater expects: `~/.local/share/claude/versions/<version>` with
 a `~/.local/bin/claude` symlink. Because a home volume that already has content masks whatever the
 image put in `$HOME`, the resolved binary is also **hard-linked** to
-`/usr/local/share/nshafer-claude/claude` — one inode, two names, so the ~300MB binary is stored once
+`/usr/local/share/devcontainer/claude/claude` — one inode, two names, so the ~300MB binary is stored once
 in the layer rather than twice — and `/usr/local/bin/claude` is a wrapper preferring
 `$HOME/.local/bin/claude` with the system copy as fallback. Fresh volume, stale volume or no volume,
 `claude` resolves and runs, and a self-update in the home directory is picked up rather than being

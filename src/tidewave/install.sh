@@ -26,7 +26,7 @@ PORT="${PORT:-9000}"
 ALLOW_REMOTE_ACCESS="${ALLOWREMOTEACCESS:-true}"
 AUTOSTART="${AUTOSTART:-true}"
 
-SHARE_DIR=/usr/local/share/nshafer-tidewave
+SHARE_DIR=/usr/local/share/devcontainer/tidewave
 BINARY=/usr/local/bin/tidewave
 RELEASES=https://github.com/tidewave-ai/tidewave_app/releases
 

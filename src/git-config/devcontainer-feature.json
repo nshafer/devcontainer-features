@@ -1,6 +1,6 @@
 {
   "id": "git-config",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "name": "Git config (nshafer)",
   "description": "Copies the host's git configuration and excludes file into the container, from git's XDG config directory, in every container - including the ones the CLI creates, which copy nothing.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/git-config",
@@ -12,7 +12,7 @@
       "type": "bind"
     }
   ],
-  "postCreateCommand": "/usr/local/share/nshafer-git-config/post-create.sh",
+  "postCreateCommand": "/usr/local/share/devcontainer/git-config/post-create.sh",
   "installsAfter": [
     "ghcr.io/devcontainers/features/common-utils"
   ]

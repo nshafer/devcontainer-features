@@ -11,7 +11,7 @@
 # can do that root cannot is read the forwarding manifest -- see check-manifest in sandbox.sh.
 set -uo pipefail
 
-SHARE_DIR=/usr/local/share/nshafer-sandbox
+SHARE_DIR=/usr/local/share/devcontainer/sandbox
 
 if ! pgrep -f 'sandbox\.sh daemon' >/dev/null 2>&1; then
     echo "!!! sandbox: the sweeper is not running, so the feature's entrypoint did not run." >&2

@@ -11,7 +11,7 @@
 # Quiet on success. A hook that prints a wall of text on every attach is a hook people stop reading.
 set -uo pipefail
 
-SHARE_DIR=/usr/local/share/nshafer-sandbox
+SHARE_DIR=/usr/local/share/devcontainer/sandbox
 
 # $$ is this script's pid. BASH_ENV has already scrubbed the forwarded variables out of this
 # shell, but the kernel's copy of what it was exec'd with still holds them, and that is what

@@ -18,7 +18,7 @@ SCRUB_ENV="${SCRUBENV:-true}"
 DROP_SUDO="${DROPSUDO:-true}"
 SWEEP_INTERVAL="${SWEEPINTERVAL:-1}"
 
-SHARE_DIR=/usr/local/share/nshafer-sandbox
+SHARE_DIR=/usr/local/share/devcontainer/sandbox
 
 case "$SWEEP_INTERVAL" in
     '' | *[!0-9]*)
@@ -100,11 +100,11 @@ chmod 0755 /usr/local/bin/sandbox-status
 # and it is set as the feature's containerEnv rather than here.)
 if [ "$SCRUB_ENV" = true ]; then
     install -d /etc/profile.d
-    cat > /etc/profile.d/00-nshafer-sandbox.sh <<EOF
+    cat > /etc/profile.d/00-devcontainer-sandbox.sh <<EOF
 # Installed by the sandbox devcontainer feature.
 . $SHARE_DIR/scrub-env.sh
 EOF
-    chmod 0644 /etc/profile.d/00-nshafer-sandbox.sh
+    chmod 0644 /etc/profile.d/00-devcontainer-sandbox.sh
 
     for rc in /etc/bash.bashrc /etc/zsh/zshenv; do
         install -d "$(dirname "$rc")"

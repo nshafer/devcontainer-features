@@ -1,6 +1,6 @@
 {
   "id": "claude",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "name": "Claude Code (nshafer)",
   "description": "Installs the Claude Code CLI with the native installer, and can seed ~/.claude/settings.json at build time.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/claude",

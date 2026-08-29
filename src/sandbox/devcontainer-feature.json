@@ -1,6 +1,6 @@
 {
   "id": "sandbox",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "name": "Sandbox (nshafer)",
   "description": "Seals the host sockets VS Code forwards into a dev container - SSH agent, GPG agent, X11 and the VS Code IPC channels - and removes the remote user's sudo grant so the seals cannot simply be undone. Mitigation, not a boundary: the socket must exist for the container to attach, so there is a short window at each attach. See the README.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/sandbox",
@@ -45,11 +45,11 @@
       "description": "Seconds between backstop sweeps. Sealing is normally driven by inotify, within about a millisecond of a socket appearing; this poll only catches what inotify missed, so it rarely needs changing."
     }
   },
-  "entrypoint": "/usr/local/share/nshafer-sandbox/entrypoint.sh",
-  "postStartCommand": "/usr/local/share/nshafer-sandbox/post-start.sh",
-  "postAttachCommand": "/usr/local/share/nshafer-sandbox/post-attach.sh",
+  "entrypoint": "/usr/local/share/devcontainer/sandbox/entrypoint.sh",
+  "postStartCommand": "/usr/local/share/devcontainer/sandbox/post-start.sh",
+  "postAttachCommand": "/usr/local/share/devcontainer/sandbox/post-attach.sh",
   "containerEnv": {
-    "BASH_ENV": "/usr/local/share/nshafer-sandbox/scrub-env.sh"
+    "BASH_ENV": "/usr/local/share/devcontainer/sandbox/scrub-env.sh"
   },
   "installsAfter": [
     "ghcr.io/devcontainers/features/common-utils"

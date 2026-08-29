@@ -44,7 +44,7 @@ if [ "$CAN_MOUNT" = no ]; then
     # Not left empty: a scenario that asserts nothing should still say the feature is installed,
     # or a broken build would show up here as a pass.
     check "the feature is installed even though the mount checks were skipped" bash -c '
-        test -x /usr/local/share/nshafer-sandbox/sandbox.sh
+        test -x /usr/local/share/devcontainer/sandbox/sandbox.sh
         sandbox-status'
 
     reportResults
@@ -71,7 +71,7 @@ check "chmod on the mount point does write through to the source" bash -c '
 check "the sweeper refuses the bind mount and leaves the source untouched" bash -c '
     before=$(stat -c %a:%U /tmp/pretend-host-wayland.sock)
     echo "source before: $before"
-    out=$(sudo -n env SANDBOX_X11_DIR=/tmp/fake-x11 /usr/local/share/nshafer-sandbox/sandbox.sh block-fixed 2>&1)
+    out=$(sudo -n env SANDBOX_X11_DIR=/tmp/fake-x11 /usr/local/share/devcontainer/sandbox/sandbox.sh block-fixed 2>&1)
     echo "$out"
     echo "$out" | grep -q "bind mount from the host" || { echo "no bind-mount warning"; exit 1; }
     after=$(stat -c %a:%U /tmp/pretend-host-wayland.sock)
@@ -80,12 +80,12 @@ check "the sweeper refuses the bind mount and leaves the source untouched" bash 
         || { echo "$before -> $after: the host socket was modified. This breaks the desktop."; exit 1; }'
 
 check "the warning names the host-side setting, since that is the only real fix" bash -c '
-    out=$(sudo -n env SANDBOX_X11_DIR=/tmp/fake-x11 /usr/local/share/nshafer-sandbox/sandbox.sh block-fixed 2>&1)
+    out=$(sudo -n env SANDBOX_X11_DIR=/tmp/fake-x11 /usr/local/share/devcontainer/sandbox/sandbox.sh block-fixed 2>&1)
     echo "$out" | grep -q "dev.containers.mountWaylandSocket"'
 
 check "a full sweep also leaves it alone" bash -c '
     before=$(stat -c %a:%U /tmp/pretend-host-wayland.sock)
-    sudo -n env SANDBOX_X11_DIR=/tmp/fake-x11 /usr/local/share/nshafer-sandbox/sandbox.sh sweep >/dev/null 2>&1
+    sudo -n env SANDBOX_X11_DIR=/tmp/fake-x11 /usr/local/share/devcontainer/sandbox/sandbox.sh sweep >/dev/null 2>&1
     after=$(stat -c %a:%U /tmp/pretend-host-wayland.sock)
     echo "$before -> $after"
     [ "$before" = "$after" ] || { echo "the host socket was modified by the sweep"; exit 1; }'

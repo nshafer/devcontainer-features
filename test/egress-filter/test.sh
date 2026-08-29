@@ -18,7 +18,7 @@ check "the tools and scripts landed" bash -c '
     # No command for widening the list from inside -- see the README.
     ! command -v egress-allow >/dev/null || { echo "egress-allow should not exist"; exit 1; }
     id egressfilter >/dev/null || { echo "no proxy uid"; exit 1; }
-    test -r /usr/local/share/nshafer-egress-filter/config'
+    test -r /usr/local/share/devcontainer/egress-filter/config'
 
 check "the filter came up at container start" bash -c '
     egress-status | tee /dev/stderr
@@ -27,14 +27,14 @@ check "the filter came up at container start" bash -c '
 
 check "the baseline is merged, so VS Code can still reach the marketplace" bash -c '
     egress-status | grep -q "baseline:"
-    grep -q "visualstudio" /etc/nshafer-egress-filter/allow.regex'
+    grep -q "visualstudio" /etc/devcontainer/egress-filter/allow.regex'
 
 # The global list is a file on the host, mounted read-only.
 # allow.regex is what the proxy reads and is unreadable at a glance: anchored, escaped, sorted, with
 # no trace of where any line came from. The concatenated file answers "why is this host allowed" and
 # "did my edit land", which is the question anyone actually has.
 check "the concatenated allowlist is written, with a header per source" bash -c '
-    f=/etc/nshafer-egress-filter/allowlist.txt
+    f=/etc/devcontainer/egress-filter/allowlist.txt
     test -r "$f" || { echo "not written"; exit 1; }
     grep -q "^# baseline: " "$f" || { echo "no baseline header"; sed -n 1,20p "$f"; exit 1; }
     grep -q "^# global: "   "$f" || { echo "no global header"; exit 1; }
@@ -43,16 +43,16 @@ check "the concatenated allowlist is written, with a header per source" bash -c 
     grep -q "rewritten on every reload" "$f" || { echo "no do-not-edit warning"; exit 1; }'
 
 check "it carries the source comments through, not just the hosts" bash -c '
-    f=/etc/nshafer-egress-filter/allowlist.txt
+    f=/etc/devcontainer/egress-filter/allowlist.txt
     # The baseline explains itself; that explanation is the useful part when reading this file.
     grep -q "cannot reach the marketplace" "$f" || { echo "source comments were stripped"; exit 1; }
     grep -q "marketplace.visualstudio.com" "$f" || { echo "baseline hosts missing"; exit 1; }'
 
 check "status points at it, so it can be found" bash -c '
-    egress-status | tee /dev/stderr         | grep -qE "allowlist +[0-9]+ patterns \(/etc/nshafer-egress-filter/allowlist.txt\)"'
+    egress-status | tee /dev/stderr         | grep -qE "allowlist +[0-9]+ patterns \(/etc/devcontainer/egress-filter/allowlist.txt\)"'
 
 check "it is readable without root" bash -c '
-    head -1 /etc/nshafer-egress-filter/allowlist.txt >/dev/null || { echo "cannot read as $(whoami)"; exit 1; }'
+    head -1 /etc/devcontainer/egress-filter/allowlist.txt >/dev/null || { echo "cannot read as $(whoami)"; exit 1; }'
 
 check "the global list on the host is merged" bash -c '
     test -r /mnt/egress-filter/allowlist.txt || { echo "global list not mounted"; exit 1; }
@@ -86,7 +86,7 @@ check "the global list is read-only from inside, which is why it can be watched"
 
 # ...and it IS honoured on the next start, which is what makes the project list useful at all.
 check "the project list is picked up by a privileged rebuild, as a restart would" bash -c '
-    sudo -n /usr/local/share/nshafer-egress-filter/egress.sh reload >/dev/null 2>&1
+    sudo -n /usr/local/share/devcontainer/egress-filter/egress.sh reload >/dev/null 2>&1
     for _ in $(seq 1 10); do
         code=$(fetch example.com); [ "$code" = 200 ] && break
         sleep 1
@@ -112,7 +112,7 @@ check "DNS still resolves, as configured" bash -c '
 # a nameserver the other end controls. So the accepts name a destination, and the destinations are
 # the resolvers this container was actually given.
 check "port 53 is pinned to the resolvers this container was given" bash -c '
-    rules=$(sudo -n iptables -S NSHAFER_EGRESS)
+    rules=$(sudo -n iptables -S DEVCONTAINER_EGRESS)
     dns=$(echo "$rules" | grep -- "--dport 53" || true)
     echo "$dns" | sed "s/^/  /"
     [ -n "$dns" ] || { echo "no DNS rules at all"; exit 1; }
@@ -156,7 +156,7 @@ check "a blocked plain-HTTP request explains itself" bash -c '
     echo "$body" | grep -q "cannot fix this yourself"'
 
 check "the notes are installed and say what will not work" bash -c '
-    f=/usr/local/share/nshafer-egress-filter/BLOCKED.md
+    f=/usr/local/share/devcontainer/egress-filter/BLOCKED.md
     test -r "$f"
     grep -q "no command in this container that adds a host" "$f"
     grep -q "strict-ssl" "$f"

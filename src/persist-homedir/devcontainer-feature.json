@@ -1,6 +1,6 @@
 {
   "id": "persist-homedir",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "name": "Persistent home directory (nshafer)",
   "description": "Keeps /home on a named volume so shell history, caches and tool installs survive a rebuild, while keeping the VS Code server out of it so extensions reinstall fresh.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/persist-homedir",
@@ -16,7 +16,7 @@
       "type": "volume"
     }
   ],
-  "entrypoint": "/usr/local/share/nshafer-persist-homedir/entrypoint.sh",
+  "entrypoint": "/usr/local/share/devcontainer/persist-homedir/entrypoint.sh",
   "installsAfter": [
     "ghcr.io/devcontainers/features/common-utils"
   ]

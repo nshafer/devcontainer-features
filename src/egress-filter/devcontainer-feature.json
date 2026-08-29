@@ -1,6 +1,6 @@
 {
   "id": "egress-filter",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "name": "Egress filter (nshafer)",
   "description": "Default-deny outbound networking, with a hostname allowlist merged from a global list on the host, a per-project list in the repo, and a baseline that keeps VS Code working. Enforced by an in-container firewall, so an agent that ignores HTTP_PROXY simply cannot connect.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/egress-filter",
@@ -62,8 +62,8 @@
   "capAdd": [
     "NET_ADMIN"
   ],
-  "entrypoint": "/usr/local/share/nshafer-egress-filter/entrypoint.sh",
-  "postAttachCommand": "/usr/local/share/nshafer-egress-filter/post-attach.sh",
+  "entrypoint": "/usr/local/share/devcontainer/egress-filter/entrypoint.sh",
+  "postAttachCommand": "/usr/local/share/devcontainer/egress-filter/post-attach.sh",
   "installsAfter": [
     "ghcr.io/devcontainers/features/common-utils"
   ]

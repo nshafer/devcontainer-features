@@ -9,7 +9,7 @@ check "wrapper is on PATH" bash -c '[ "$(command -v claude)" = "/usr/local/bin/c
 check "home install is the canonical layout" bash -c '
     [ -L "$HOME/.local/bin/claude" ] &&
     readlink "$HOME/.local/bin/claude" | grep -q "/.local/share/claude/versions/"'
-check "system fallback exists" test -x /usr/local/share/nshafer-claude/claude
+check "system fallback exists" test -x /usr/local/share/devcontainer/claude/claude
 check "wrapper prefers the home copy" bash -c '
     grep -q "HOME/.local/bin/claude" /usr/local/bin/claude'
 check "wrapper works when the home copy is gone" bash -c '
@@ -23,7 +23,7 @@ check "~/.claude is a real directory, not a mount" bash -c '
 check "nothing from the host's ~/.claude is mounted" bash -c '
     ! grep -qE " /mnt/claude(-config|-settings\.json)? " /proc/mounts'
 check "nothing runs at postCreate any more" bash -c '
-    [ ! -e /usr/local/share/nshafer-claude/post-create.sh ]'
+    [ ! -e /usr/local/share/devcontainer/claude/post-create.sh ]'
 
 # The file itself still exists with no settings option: the installer writes autoUpdatesChannel into
 # it when given a version target. What must not be there is anything this feature seeded.

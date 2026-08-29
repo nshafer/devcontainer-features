@@ -11,7 +11,7 @@ check "this is genuinely a musl image" bash -c '
 check "tidewave runs" tidewave --version
 
 check "the musl asset was chosen" bash -c '
-    /usr/local/share/nshafer-tidewave/post-start.sh >/dev/null
+    /usr/local/share/devcontainer/tidewave/post-start.sh >/dev/null
     curl -sf --max-time 5 -X POST http://127.0.0.1:9000/about | tee /dev/stderr | grep -q "unknown-linux-musl"'
 
 reportResults

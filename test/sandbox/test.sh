@@ -14,15 +14,15 @@ source dev-container-features-test-lib
 source ./_helpers.sh
 
 check "the scripts and config landed" bash -c '
-    test -x /usr/local/share/nshafer-sandbox/sandbox.sh
-    test -x /usr/local/share/nshafer-sandbox/entrypoint.sh
-    test -x /usr/local/share/nshafer-sandbox/post-start.sh
-    test -x /usr/local/share/nshafer-sandbox/post-attach.sh
+    test -x /usr/local/share/devcontainer/sandbox/sandbox.sh
+    test -x /usr/local/share/devcontainer/sandbox/entrypoint.sh
+    test -x /usr/local/share/devcontainer/sandbox/post-start.sh
+    test -x /usr/local/share/devcontainer/sandbox/post-attach.sh
     test -x /usr/local/bin/sandbox-status
-    test -r /usr/local/share/nshafer-sandbox/config'
+    test -r /usr/local/share/devcontainer/sandbox/config'
 
 check "defaults were baked in" bash -c '
-    . /usr/local/share/nshafer-sandbox/config
+    . /usr/local/share/devcontainer/sandbox/config
     [ "$BLOCK_SSH" = true ] || { echo "ssh: $BLOCK_SSH"; exit 1; }
     [ "$BLOCK_GPG" = true ] || { echo "gpg: $BLOCK_GPG"; exit 1; }
     [ "$BLOCK_X11" = true ] || { echo "x11: $BLOCK_X11"; exit 1; }
@@ -147,14 +147,14 @@ check "the remote-containers ipc socket is swept" bash -c '
 
 check "check-manifest passes when the declared channels are sealed" bash -c '
     out=$(REMOTE_CONTAINERS_SOCKETS='"'"'["/tmp/vscode-ssh-auth-test-uuid.sock"]'"'"' \
-        /usr/local/share/nshafer-sandbox/sandbox.sh check-manifest 2>&1)
+        /usr/local/share/devcontainer/sandbox/sandbox.sh check-manifest 2>&1)
     echo "$out"
     echo "$out" | grep -q "every channel VS Code declared is sealed"'
 
 check "check-manifest reports a declared channel the globs do not cover" bash -c '
     sock-bind /tmp/some-future-name.sock
     out=$(REMOTE_CONTAINERS_SOCKETS='"'"'["/tmp/some-future-name.sock"]'"'"' \
-        /usr/local/share/nshafer-sandbox/sandbox.sh check-manifest 2>&1) \
+        /usr/local/share/devcontainer/sandbox/sandbox.sh check-manifest 2>&1) \
         && { echo "check-manifest exited 0 with an open channel:"; echo "$out"; exit 1; }
     echo "$out" | grep -q "/tmp/some-future-name.sock and it is still reachable"'
 
@@ -165,13 +165,13 @@ check "check-manifest reports a declared channel the globs do not cover" bash -c
 check "the scrub really does blind a naive check" bash -c '
     out=$(SSH_AUTH_SOCK=/tmp/vscode-ssh-auth-test-uuid.sock bash -c "
         [ -z \"\$SSH_AUTH_SOCK\" ] || { echo \"BASH_ENV scrub did not run\"; exit 1; }
-        /usr/local/share/nshafer-sandbox/sandbox.sh check-manifest
+        /usr/local/share/devcontainer/sandbox/sandbox.sh check-manifest
     " 2>&1)
     [ -z "$out" ] || { echo "expected no manifest to be found: $out"; exit 1; }'
 
 check "passing the caller pid restores it" bash -c '
     out=$(SSH_AUTH_SOCK=/tmp/vscode-ssh-auth-test-uuid.sock bash -c "
-        /usr/local/share/nshafer-sandbox/sandbox.sh check-manifest \$\$
+        /usr/local/share/devcontainer/sandbox/sandbox.sh check-manifest \$\$
     " 2>&1)
     echo "$out" | grep -q "every channel VS Code declared is sealed"'
 
@@ -203,8 +203,8 @@ check "the container start left exactly one sweeper running" bash -c '
 
 check "inotify is available, so sealing is not left to the poll interval" bash -c '
     command -v inotifywait >/dev/null || { echo "inotifywait missing; install.sh did not install it"; exit 1; }
-    grep -q "inotify" /var/log/nshafer-sandbox.log || { echo "daemon did not report inotify mode:"; \
-        cat /var/log/nshafer-sandbox.log; exit 1; }'
+    grep -q "inotify" /var/log/devcontainer/sandbox.log || { echo "daemon did not report inotify mode:"; \
+        cat /var/log/devcontainer/sandbox.log; exit 1; }'
 
 check "a new socket is sealed in milliseconds, not on the next poll" bash -c '
     sock-bind /tmp/vscode-ssh-auth-timing.sock
@@ -233,12 +233,12 @@ check "sandbox-status says every channel is blocked" bash -c '
 # ---------------------------------------------------------------------------------------------
 
 check "the scrub is wired into /etc, never \$HOME" bash -c '
-    grep -q nshafer-sandbox /etc/profile.d/00-nshafer-sandbox.sh
-    grep -q nshafer-sandbox /etc/bash.bashrc
-    grep -q nshafer-sandbox /etc/zsh/zshenv
+    grep -q devcontainer/sandbox /etc/profile.d/00-devcontainer-sandbox.sh
+    grep -q devcontainer/sandbox /etc/bash.bashrc
+    grep -q devcontainer/sandbox /etc/zsh/zshenv
     # A persisted home volume masks whatever the image wrote to ~/.bashrc, so a scrub installed
     # there would work exactly once and then quietly stop on the next rebuild.
-    ! grep -q nshafer-sandbox "$HOME/.bashrc" 2>/dev/null'
+    ! grep -q devcontainer/sandbox "$HOME/.bashrc" 2>/dev/null'
 
 check "an interactive bash has the socket variables scrubbed" bash -c '
     out=$(SSH_AUTH_SOCK=/tmp/x.sock GIT_ASKPASS=/tmp/a.sh VSCODE_IPC_HOOK_CLI=/tmp/i.sock \
@@ -250,7 +250,7 @@ check "a login shell has them scrubbed" bash -c '
     echo "$out" | grep -q "ssh=\[\]"'
 
 check "a non-interactive bash is covered through BASH_ENV" bash -c '
-    [ "$BASH_ENV" = /usr/local/share/nshafer-sandbox/scrub-env.sh ] \
+    [ "$BASH_ENV" = /usr/local/share/devcontainer/sandbox/scrub-env.sh ] \
         || { echo "BASH_ENV: $BASH_ENV"; exit 1; }
     out=$(SSH_AUTH_SOCK=/tmp/x.sock bash -c "echo ssh=[\$SSH_AUTH_SOCK]")
     echo "$out" | grep -q "ssh=\[\]"'

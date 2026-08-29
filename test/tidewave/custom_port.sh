@@ -3,15 +3,15 @@ set -e
 source dev-container-features-test-lib
 
 check "the port option reached the config" bash -c '
-    . /usr/local/share/nshafer-tidewave/config
+    . /usr/local/share/devcontainer/tidewave/config
     [ "$PORT" = 9876 ] || { echo "port: $PORT"; exit 1; }'
 
 check "allowRemoteAccess=false drops the flag" bash -c '
-    . /usr/local/share/nshafer-tidewave/config
+    . /usr/local/share/devcontainer/tidewave/config
     case "$ARGS" in *--allow-remote-access*) echo "args: $ARGS"; exit 1;; esac'
 
 check "post-start brings it up on the custom port" bash -c '
-    /usr/local/share/nshafer-tidewave/post-start.sh | grep -q "listening on 9876"'
+    /usr/local/share/devcontainer/tidewave/post-start.sh | grep -q "listening on 9876"'
 
 check "it reports the custom port" bash -c '
     curl -sf --max-time 5 -X POST http://127.0.0.1:9876/about | grep -q "\"http_port\":9876"'

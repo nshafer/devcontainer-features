@@ -1,6 +1,6 @@
 {
   "id": "tidewave",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "name": "Tidewave (nshafer)",
   "description": "Installs the Tidewave CLI at build time and starts it on every container start, so the Tidewave app on the host can drive the project inside the container.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/tidewave",
@@ -33,7 +33,7 @@
       "description": "Start the CLI at postStart. Turn off to install the binary only and run 'tidewave' yourself."
     }
   },
-  "postStartCommand": "/usr/local/share/nshafer-tidewave/post-start.sh",
+  "postStartCommand": "/usr/local/share/devcontainer/tidewave/post-start.sh",
   "installsAfter": [
     "ghcr.io/devcontainers/features/common-utils"
   ]

@@ -18,7 +18,7 @@ settings_error() {
     echo "!!! Write the object with single quotes, which survive the devcontainer CLI's quoting:" >&2
     echo "!!!   \"settings\": \"{'includeCoAuthoredBy': false}\"" >&2
 }
-SYSTEM_DIR=/usr/local/share/nshafer-claude
+SYSTEM_DIR=/usr/local/share/devcontainer/claude
 
 USERNAME="${_REMOTE_USER:-root}"
 USER_HOME="${_REMOTE_USER_HOME:-}"

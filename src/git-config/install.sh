@@ -20,7 +20,7 @@ if ! command -v git >/dev/null 2>&1; then
     fi
 fi
 
-install -d /usr/local/share/nshafer-git-config
-install -m 0755 post-create.sh /usr/local/share/nshafer-git-config/post-create.sh
+install -d /usr/local/share/devcontainer/git-config
+install -m 0755 post-create.sh /usr/local/share/devcontainer/git-config/post-create.sh
 
 echo "==> git-config: build stage done ($(git --version))"

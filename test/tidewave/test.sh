@@ -17,13 +17,13 @@ check "the asset matches the image's libc" bash -c '
     ldd /usr/local/bin/tidewave | grep -q "libc.so.6" || { echo "not linked against glibc"; exit 1; }'
 
 check "default flags were baked in" bash -c '
-    . /usr/local/share/nshafer-tidewave/config
+    . /usr/local/share/devcontainer/tidewave/config
     [ "$AUTOSTART" = true ] || { echo "autostart: $AUTOSTART"; exit 1; }
     [ "$PORT" = 9000 ]      || { echo "port: $PORT"; exit 1; }
     case "$ARGS" in *--allow-remote-access*) ;; *) echo "args: $ARGS"; exit 1;; esac'
 
 check "post-start brings it up" bash -c '
-    out=$(/usr/local/share/nshafer-tidewave/post-start.sh)
+    out=$(/usr/local/share/devcontainer/tidewave/post-start.sh)
     echo "$out"
     echo "$out" | grep -q "listening on 9000"'
 
@@ -55,7 +55,7 @@ check "an origin of localhost is accepted" bash -c '
 # postStart runs on every container start, so a second run must find the first and not stack a
 # second process on a port that is already taken.
 check "a second run leaves the running instance alone" bash -c '
-    /usr/local/share/nshafer-tidewave/post-start.sh | grep -q "already listening"
+    /usr/local/share/devcontainer/tidewave/post-start.sh | grep -q "already listening"
     [ "$(pgrep -c -x tidewave)" = 1 ] || { pgrep -a -x tidewave; exit 1; }'
 
 check "the log says what was started" bash -c '
@@ -66,6 +66,6 @@ check "the log says what was started" bash -c '
 check "an unset TIDEWAVE_HOST_PATH is called out" bash -c '
     pkill -x tidewave; sleep 1
     env -u TIDEWAVE_HOST_PATH TIDEWAVE_LOG=/tmp/tidewave-hostpath.log \
-        /usr/local/share/nshafer-tidewave/post-start.sh | grep -q "TIDEWAVE_HOST_PATH is not set"'
+        /usr/local/share/devcontainer/tidewave/post-start.sh | grep -q "TIDEWAVE_HOST_PATH is not set"'
 
 reportResults

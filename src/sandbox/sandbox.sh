@@ -20,7 +20,7 @@
 # after five minutes stops covering you; this one runs as long as the container does.
 set -uo pipefail
 
-CONFIG=/usr/local/share/nshafer-sandbox/config
+CONFIG=/usr/local/share/devcontainer/sandbox/config
 # The defaults matter: the test suite drives this script directly, without the generated config.
 # USERNAME and USER_UID are read by nothing in here, but they are part of the config's contract --
 # install.sh writes them and the tests assert on them -- so they are declared with the rest rather

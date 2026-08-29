@@ -9,9 +9,11 @@
 # egress open and says so in the status output.
 set -uo pipefail
 [ "$(id -u)" = "0" ] || exit 0
-LOG=/var/log/nshafer-egress-filter.log
+LOG=/var/log/devcontainer/egress-filter.log
+# Per-project directory rather than loose in /var/log, and >> will not create it for us.
+install -d /var/log/devcontainer 2>/dev/null || true
 {
     echo "=== egress-filter entrypoint $(date -Is)"
-    /usr/local/share/nshafer-egress-filter/egress.sh up
+    /usr/local/share/devcontainer/egress-filter/egress.sh up
 } >> "$LOG" 2>&1 || true
 exit 0

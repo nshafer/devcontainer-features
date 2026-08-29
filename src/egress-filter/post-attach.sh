@@ -6,7 +6,7 @@
 # times out, a git fetch that hangs. Saying plainly that egress is filtered, and where the lists
 # came from, turns half an hour of confusion into one line.
 set -uo pipefail
-SHARE_DIR=/usr/local/share/nshafer-egress-filter
+SHARE_DIR=/usr/local/share/devcontainer/egress-filter
 "$SHARE_DIR/egress.sh" status || true
 echo
 echo "==> egress-filter: to allow a host:"

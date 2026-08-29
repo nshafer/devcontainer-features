@@ -16,7 +16,7 @@
 set -euo pipefail
 
 SERVER_DIR=/var/local/vscode-server
-ENTRYPOINT_DIR=/usr/local/share/nshafer-persist-homedir
+ENTRYPOINT_DIR=/usr/local/share/devcontainer/persist-homedir
 
 USERNAME="${_REMOTE_USER:-root}"
 USER_HOME="${_REMOTE_USER_HOME:-}"

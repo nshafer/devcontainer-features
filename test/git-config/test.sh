@@ -10,7 +10,7 @@ source dev-container-features-test-lib
 # CLI could stop honoring silently.
 before=$(find /mnt/git-config -type f -exec md5sum {} + | sort; find /mnt/git-config -exec stat -c '%n %Y %a' {} + | sort)
 
-/usr/local/share/nshafer-git-config/post-create.sh
+/usr/local/share/devcontainer/git-config/post-create.sh
 
 check "git is installed" git --version
 check "config was copied" test -s "$HOME/.config/git/config"
@@ -48,7 +48,7 @@ check "unsets keys naming a program this container lacks, keeps the rest" bash -
         "	required = true" \
         "[user]" \
         "	name = Synthetic" > "$src/config"
-    out=$(GIT_CONFIG_SOURCE_DIR="$src" HOME="$home" /usr/local/share/nshafer-git-config/post-create.sh 2>&1)
+    out=$(GIT_CONFIG_SOURCE_DIR="$src" HOME="$home" /usr/local/share/devcontainer/git-config/post-create.sh 2>&1)
     g() { HOME="$home" git config --global --get "$1" 2>/dev/null || true; }
     [ -z "$(g core.editor)" ]        || { echo "core.editor survived"; exit 1; }
     [ -z "$(g gpg.program)" ]        || { echo "gpg.program survived"; exit 1; }
@@ -75,12 +75,12 @@ check "leaves the host mount untouched" bash -c '
 
 check "is idempotent" bash -c '
     a=$(md5sum < "$HOME/.config/git/config")
-    /usr/local/share/nshafer-git-config/post-create.sh >/dev/null
+    /usr/local/share/devcontainer/git-config/post-create.sh >/dev/null
     [ "$a" = "$(md5sum < "$HOME/.config/git/config")" ]'
 
 check "will not clobber a file it did not write" bash -c '
     echo "not ours" > "$HOME/.config/git/ignore"
-    /usr/local/share/nshafer-git-config/post-create.sh 2>&1 | grep -q "leaving it alone"
+    /usr/local/share/devcontainer/git-config/post-create.sh 2>&1 | grep -q "leaving it alone"
     [ "$(cat "$HOME/.config/git/ignore")" = "not ours" ]'
 
 reportResults

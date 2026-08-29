@@ -18,8 +18,8 @@
 # user, without anything being briefly open.
 set -uo pipefail
 
-CONFIG=/usr/local/share/nshafer-egress-filter/config
-SHARE_DIR=/usr/local/share/nshafer-egress-filter
+CONFIG=/usr/local/share/devcontainer/egress-filter/config
+SHARE_DIR=/usr/local/share/devcontainer/egress-filter
 # Defaults so the script can be driven directly, which the tests do.
 ALLOW=""
 DENY=""
@@ -47,23 +47,28 @@ GLOBAL_LIST_HOST="~/.config/egress-filter/allowlist.txt"
 # merge can be exercised without rebuilding the image.
 PRESETS="${EGRESS_PRESETS:-$PRESETS}"
 DNS_SERVERS="${EGRESS_DNS_SERVERS:-$DNS_SERVERS}"
-FILTER_FILE=/etc/nshafer-egress-filter/allow.regex
-PROXY_CONF=/etc/nshafer-egress-filter/tinyproxy.conf
-SOURCES_FILE=/etc/nshafer-egress-filter/sources.txt
+FILTER_FILE=/etc/devcontainer/egress-filter/allow.regex
+PROXY_CONF=/etc/devcontainer/egress-filter/tinyproxy.conf
+SOURCES_FILE=/etc/devcontainer/egress-filter/sources.txt
 # Every source, concatenated in merge order with a header before each one. allow.regex is what the
 # proxy reads and is unreadable at a glance -- anchored, escaped regex, sorted, with no indication
 # of where any line came from. This is the same content before that transformation, which is what
 # you want when the question is "why is this host allowed" or "did my edit actually land".
-ALLOWLIST_FILE=/etc/nshafer-egress-filter/allowlist.txt
+ALLOWLIST_FILE=/etc/devcontainer/egress-filter/allowlist.txt
 # Readable by anyone, because the status command has to work for the remote user and
 # querying iptables needs root -- see firewall_state().
-STATE_FILE=/run/nshafer-egress-filter.state
+STATE_FILE=/run/devcontainer/egress-filter.state
 # The proxy's own log, separate from the feature's. It has to be a different file and it has to
 # be pre-created: tinyproxy drops to $PROXY_USER before opening it, so a root-owned file is
 # silently not written and every denial is lost -- which is exactly the record you need to build
 # an allowlist from. World-readable on purpose, so the person building the list can read it
 # without root.
-PROXY_LOG=/var/log/nshafer-egress-filter-proxy.log
+PROXY_LOG=/var/log/devcontainer/egress-filter-proxy.log
+
+# Both sit under a per-project directory rather than loose in /run and /var/log, so neither can
+# collide with a distro package of the same name. Created here because any subcommand may be the
+# first to write one; the failure is ignored because `status` deliberately runs unprivileged.
+install -d "$(dirname "$STATE_FILE")" "$(dirname "$PROXY_LOG")" 2>/dev/null || true
 
 log() { echo "==> egress-filter: $*"; }
 warn() { echo "!!! egress-filter: $*" >&2; }
@@ -315,18 +320,18 @@ apply_firewall() {
     local uid ns resolvers pinned=""
     uid="$(id -u "$PROXY_USER" 2>/dev/null)" || { warn "no $PROXY_USER user; refusing to firewall"; return 1; }
 
-    iptables -F NSHAFER_EGRESS 2>/dev/null || iptables -N NSHAFER_EGRESS 2>/dev/null
-    iptables -D OUTPUT -j NSHAFER_EGRESS 2>/dev/null
+    iptables -F DEVCONTAINER_EGRESS 2>/dev/null || iptables -N DEVCONTAINER_EGRESS 2>/dev/null
+    iptables -D OUTPUT -j DEVCONTAINER_EGRESS 2>/dev/null
 
-    iptables -A NSHAFER_EGRESS -o lo -j ACCEPT
-    iptables -A NSHAFER_EGRESS -m state --state ESTABLISHED,RELATED -j ACCEPT
+    iptables -A DEVCONTAINER_EGRESS -o lo -j ACCEPT
+    iptables -A DEVCONTAINER_EGRESS -m state --state ESTABLISHED,RELATED -j ACCEPT
     # Per resolver, not per port: everything else on 53 falls through to the REJECT below.
     if [ "$ALLOW_DNS" = true ]; then
         resolvers="$(dns_resolvers)"
         while IFS= read -r ns; do
             [ -n "$ns" ] || continue
-            if iptables -A NSHAFER_EGRESS -p udp --dport 53 -d "$ns" -j ACCEPT 2>/dev/null &&
-               iptables -A NSHAFER_EGRESS -p tcp --dport 53 -d "$ns" -j ACCEPT 2>/dev/null; then
+            if iptables -A DEVCONTAINER_EGRESS -p udp --dport 53 -d "$ns" -j ACCEPT 2>/dev/null &&
+               iptables -A DEVCONTAINER_EGRESS -p tcp --dport 53 -d "$ns" -j ACCEPT 2>/dev/null; then
                 pinned="${pinned:+$pinned }$ns"
             else
                 warn "iptables refused a DNS rule for $ns; queries to it will be blocked"
@@ -341,10 +346,10 @@ apply_firewall() {
     # Above the DNS rules in effect, not in order: the proxy resolves server-side for the hosts it
     # is allowed to reach, and restricting it too would break allowDns=false, where resolving on
     # the container's behalf is the entire point.
-    iptables -A NSHAFER_EGRESS -m owner --uid-owner "$uid" -j ACCEPT
-    iptables -A NSHAFER_EGRESS -j REJECT --reject-with icmp-port-unreachable
+    iptables -A DEVCONTAINER_EGRESS -m owner --uid-owner "$uid" -j ACCEPT
+    iptables -A DEVCONTAINER_EGRESS -j REJECT --reject-with icmp-port-unreachable
 
-    iptables -A OUTPUT -j NSHAFER_EGRESS
+    iptables -A OUTPUT -j DEVCONTAINER_EGRESS
     # Line 1 is the marker, line 2 the resolvers that were actually pinned. Two lines rather than
     # one because status has to answer both questions and cannot query iptables without root.
     { echo applied; echo "$pinned"; } > "$STATE_FILE" 2>/dev/null
@@ -353,9 +358,9 @@ apply_firewall() {
 }
 
 flush_firewall() {
-    iptables -D OUTPUT -j NSHAFER_EGRESS 2>/dev/null
-    iptables -F NSHAFER_EGRESS 2>/dev/null
-    iptables -X NSHAFER_EGRESS 2>/dev/null
+    iptables -D OUTPUT -j DEVCONTAINER_EGRESS 2>/dev/null
+    iptables -F DEVCONTAINER_EGRESS 2>/dev/null
+    iptables -X DEVCONTAINER_EGRESS 2>/dev/null
     { echo absent; echo; } > "$STATE_FILE" 2>/dev/null
     log "firewall removed"
 }
@@ -364,17 +369,17 @@ flush_firewall() {
 # tools that ignore it get REJECT instead of a silent bypass, which is the property that matters.
 write_proxy_env() {
     local url="http://127.0.0.1:$PROXY_PORT"
-    cat > /etc/profile.d/00-nshafer-egress-filter.sh <<EOF
+    cat > /etc/profile.d/00-devcontainer-egress-filter.sh <<EOF
 # Installed by the egress-filter feature. The firewall is the control; this is the convenience.
 export HTTP_PROXY=$url  http_proxy=$url
 export HTTPS_PROXY=$url https_proxy=$url
 export NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1
 EOF
-    chmod 0644 /etc/profile.d/00-nshafer-egress-filter.sh
+    chmod 0644 /etc/profile.d/00-devcontainer-egress-filter.sh
     # Read by PAM and by VS Code's environment probe, so terminals inherit it too.
-    sed -i '/nshafer-egress-filter/,+4d' /etc/environment 2>/dev/null
+    sed -i '/devcontainer-egress-filter/,+4d' /etc/environment 2>/dev/null
     {
-        echo "# nshafer-egress-filter"
+        echo "# devcontainer-egress-filter"
         echo "HTTP_PROXY=$url"
         echo "HTTPS_PROXY=$url"
         echo "http_proxy=$url"
@@ -395,7 +400,7 @@ status() {
     # answer; everyone else reads the marker the entrypoint left.
     local applied=no ns
     if [ "$(id -u)" = 0 ]; then
-        iptables -C OUTPUT -j NSHAFER_EGRESS 2>/dev/null && applied=yes
+        iptables -C OUTPUT -j DEVCONTAINER_EGRESS 2>/dev/null && applied=yes
     elif [ "$(head -1 "$STATE_FILE" 2>/dev/null)" = applied ]; then
         applied=yes
     fi
@@ -466,9 +471,9 @@ watch_daemon() {
 start_watcher() {
     pgrep -f 'egress\.sh watch' >/dev/null 2>&1 && return 0
     if command -v setsid >/dev/null 2>&1; then
-        setsid nohup "$0" watch >> /var/log/nshafer-egress-filter.log 2>&1 < /dev/null &
+        setsid nohup "$0" watch >> /var/log/devcontainer/egress-filter.log 2>&1 < /dev/null &
     else
-        nohup "$0" watch >> /var/log/nshafer-egress-filter.log 2>&1 < /dev/null &
+        nohup "$0" watch >> /var/log/devcontainer/egress-filter.log 2>&1 < /dev/null &
     fi
     disown 2>/dev/null || true
     log "watching the global list for changes"

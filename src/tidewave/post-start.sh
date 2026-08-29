@@ -20,7 +20,7 @@ set -uo pipefail
 AUTOSTART=true
 PORT=9000
 ARGS="--port 9000 --allow-remote-access"
-CONFIG=/usr/local/share/nshafer-tidewave/config
+CONFIG=/usr/local/share/devcontainer/tidewave/config
 # Generated at build time, so there is nothing for the linter to follow here.
 # shellcheck source=/dev/null
 [ -r "$CONFIG" ] && . "$CONFIG"

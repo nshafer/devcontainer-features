@@ -16,7 +16,7 @@ ALLOW_DNS="${ALLOWDNS:-true}"
 DNS_SERVERS="${DNSSERVERS:-}"
 PROXY_PORT="${PROXYPORT:-3128}"
 
-SHARE_DIR=/usr/local/share/nshafer-egress-filter
+SHARE_DIR=/usr/local/share/devcontainer/egress-filter
 
 # Needed only so the agent notes can be written into the right home at container start.
 USERNAME="${_REMOTE_USER:-root}"
@@ -81,7 +81,7 @@ if ! id "$PROXY_USER" >/dev/null 2>&1; then
     echo "==> egress-filter: created $PROXY_USER (uid $(id -u "$PROXY_USER" 2>/dev/null || echo '?'))"
 fi
 
-install -d "$SHARE_DIR" /etc/nshafer-egress-filter
+install -d "$SHARE_DIR" /etc/devcontainer/egress-filter
 install -m 0755 egress.sh "$SHARE_DIR/egress.sh"
 install -m 0755 entrypoint.sh "$SHARE_DIR/entrypoint.sh"
 install -m 0755 post-attach.sh "$SHARE_DIR/post-attach.sh"

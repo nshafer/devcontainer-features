@@ -11,11 +11,11 @@ fetch() { timeout 15 curl -s -o /dev/null -w "%{http_code}" -x "http://127.0.0.1
 export -f fetch
 
 check "the option reached the config" bash -c '
-    . /usr/local/share/nshafer-egress-filter/config
+    . /usr/local/share/devcontainer/egress-filter/config
     [ "$DNS_SERVERS" = 192.0.2.53 ] || { echo "dnsServers: $DNS_SERVERS"; exit 1; }'
 
 check "port 53 is pinned to the configured address and nothing else" bash -c '
-    dns=$(sudo -n iptables -S NSHAFER_EGRESS | grep -- "--dport 53" || true)
+    dns=$(sudo -n iptables -S DEVCONTAINER_EGRESS | grep -- "--dport 53" || true)
     echo "$dns" | sed "s/^/  /"
     [ -n "$dns" ] || { echo "no DNS rules at all"; exit 1; }
     # One accept per protocol, both naming the configured address.
@@ -27,7 +27,7 @@ check "port 53 is pinned to the configured address and nothing else" bash -c '
 # The option replaces resolv.conf rather than adding to it, which is the whole reason to set it:
 # a resolver you did not ask for is one you did not decide to trust.
 check "the resolver from resolv.conf is not pinned as well" bash -c '
-    dns=$(sudo -n iptables -S NSHAFER_EGRESS | grep -- "--dport 53" || true)
+    dns=$(sudo -n iptables -S DEVCONTAINER_EGRESS | grep -- "--dport 53" || true)
     for ns in $(sed -n "s/^nameserver  *//p" /etc/resolv.conf); do
         case "$ns" in *:* | 192.0.2.53) continue ;; esac
         echo "$dns" | grep -q -- " -d $ns" \

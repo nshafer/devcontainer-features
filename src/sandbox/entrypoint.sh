@@ -13,10 +13,14 @@
 # channel open and says so in the report.
 set -uo pipefail
 
-SHARE_DIR=/usr/local/share/nshafer-sandbox
-LOG=/var/log/nshafer-sandbox.log
+SHARE_DIR=/usr/local/share/devcontainer/sandbox
+LOG=/var/log/devcontainer/sandbox.log
 
 [ "$(id -u)" = "0" ] || exit 0
+
+# The log lives in a per-project directory rather than loose in /var/log, so it cannot collide with
+# a distro package of the same name. Nothing else creates it, and >> will not create it for us.
+install -d /var/log/devcontainer 2>/dev/null || true
 
 {
     echo "=== sandbox entrypoint $(date -Is)"

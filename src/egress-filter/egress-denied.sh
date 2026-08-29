@@ -7,7 +7,7 @@
 #
 # Reads only, and needs no privileges -- the proxy log is deliberately world-readable and owned by
 # the proxy user, because the person building the list is not root.
-LOG=/var/log/nshafer-egress-filter-proxy.log
+LOG=/var/log/devcontainer/egress-filter-proxy.log
 
 if [ ! -r "$LOG" ]; then
     echo "egress-denied: no proxy log at $LOG"
