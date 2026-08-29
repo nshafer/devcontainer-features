@@ -11,5 +11,14 @@
         "proxyPort": "8888"
       }
     }
+  },
+  "presets": {
+    "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+    "remoteUser": "node",
+    "features": {
+      "egress-filter": {
+        "presets": "debian,npm,go"
+      }
+    }
   }
 }

@@ -1,0 +1,8 @@
+# Docker Hub needs three hosts, not one: registry, auth, and the CDN that serves the layers.
+# Missing the CDN fails *after* authenticating, which is a confusing failure to debug.
+registry-1.docker.io
+auth.docker.io
+production.cloudflare.docker.com
+# GitHub Container Registry.
+ghcr.io
+pkg-containers.githubusercontent.com

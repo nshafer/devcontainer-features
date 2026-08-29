@@ -12,4 +12,6 @@ echo "==> egress-filter: to allow a host, add it to the global list on your host
 echo "    live), or to the project list and restart the container."
 echo "    A blocked request shows up as a bare 403 -- see"
 echo "    /usr/local/share/nshafer-egress-filter/BLOCKED.md"
+echo "    'egress-denied' lists what has actually been refused, which is the best way to build"
+echo "    an allowlist -- from evidence rather than guesswork."
 exit 0

@@ -290,6 +290,41 @@ firewall change, so nothing is briefly open while you edit.
 A bare name means that host; a leading dot means the domain and its subdomains; anything that
 already looks like a regex is passed through.
 
+**`presets` saves maintaining forty hostnames by hand.** Name the ecosystems instead:
+
+```jsonc
+"ghcr.io/nshafer/devcontainer-features/egress-filter:1": {
+  "presets": "debian,npm,go,github,claude"
+}
+```
+
+Available: `debian`, `ubuntu`, `alpine`, `npm`, `hex`, `go`, `python`, `rust`, `github`, `gitlab`,
+`docker`, `claude`. Each is a small commented file under `src/egress-filter/presets/`, and the
+comments say which entries were verified against a real image or client and which were not — the
+apt mirrors, npm registry, Go proxy and Hex repo were read out of the running tools, the rest are
+first guesses. An unknown name is a **warning that lists the valid ones**, never a silent no-op.
+
+Two that are easy to get wrong and are handled in the presets: `go` needs the *source* hosts as
+well as the proxy, because `GOPROXY` ends in `,direct`; and `docker` needs three hosts, since
+missing the CDN fails only *after* authenticating.
+
+**`egress-denied` is how you build a list from evidence.** It prints every host the container asked
+for and was refused, with counts, so you allow what the build actually needed rather than a generic
+superset:
+
+```console
+$ egress-denied
+Hosts this container asked for and was refused:
+
+  REQUESTS  HOST
+         3  registry.npmjs.org
+         1  objects.githubusercontent.com
+```
+
+It reads only and needs no privileges — which required a fix: tinyproxy drops to its own uid before
+opening its log, so a root-owned log file was silently never written and **every denial was being
+lost**. The log is now pre-created owned by the proxy user and world-readable.
+
 **Only the global list is re-read while the container runs, and that asymmetry is the point.** It is
 a read-only mount of a file on your machine, so nothing inside the container can write it — the only
 party who can change it is you, at the keyboard, and a root loop applies the change within two
@@ -663,10 +698,6 @@ is worth shouting about in the creation log, not worth failing the container ove
 `devcontainer-feature.json` changes, and regenerates each `src/<feature>/README.md` from the
 metadata. Bump the version in the same commit as the change.
 
-The published packages start out **private**. After the first release, make each one public under
-`github.com/users/nshafer/packages` — otherwise every machine pulling them needs to be logged in
-to ghcr.io.
-
 ## Tests
 
 ```bash
@@ -717,7 +748,7 @@ keeps it from writing through to the host. Add `--skip-scenarios`
 for a faster edit-run loop; CI does not, because a scenario is where every non-default option is
 covered.
 
-## The constraint everything here is shaped by
+## The constraints everything here is shaped by
 
 A feature's `mounts` are static metadata. They are substituted for `${localEnv:*}`,
 `${localWorkspaceFolderBasename}` and `${devcontainerId}`, but **not** for the feature's own

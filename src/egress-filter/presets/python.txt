@@ -1,0 +1,3 @@
+# Python. pypi.org serves the index, files.pythonhosted.org serves the actual wheels.
+pypi.org
+files.pythonhosted.org

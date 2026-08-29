@@ -5,6 +5,17 @@
   "description": "Default-deny outbound networking, with a hostname allowlist merged from a global list on the host, a per-project list in the repo, and a baseline that keeps VS Code working. Enforced by an in-container firewall, so an agent that ignores HTTP_PROXY simply cannot connect.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/egress-filter",
   "options": {
+    "presets": {
+      "type": "string",
+      "default": "",
+      "proposals": [
+        "debian,npm,github",
+        "debian,npm,go,github",
+        "debian,hex,github",
+        "debian,npm,python,github,claude"
+      ],
+      "description": "Curated blocks of hostnames for common ecosystems, comma separated. Available: debian, ubuntu, alpine, npm, hex, go, python, rust, github, gitlab, docker, claude. Saves maintaining forty hostnames by hand; an unknown name is a warning, not a silent no-op."
+    },
     "allow": {
       "type": "string",
       "default": "",

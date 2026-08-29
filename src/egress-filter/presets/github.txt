@@ -1,0 +1,6 @@
+# GitHub. codeload serves tarballs; githubusercontent covers raw., objects. and release assets.
+github.com
+codeload.github.com
+.githubusercontent.com
+# The gh CLI and anything using the REST/GraphQL API.
+api.github.com

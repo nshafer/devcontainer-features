@@ -1,0 +1,4 @@
+# Ubuntu apt. ports.ubuntu.com serves arm64/armhf; harmless on x86 and needed on Apple silicon.
+archive.ubuntu.com
+security.ubuntu.com
+ports.ubuntu.com

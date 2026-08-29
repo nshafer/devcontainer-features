@@ -51,6 +51,12 @@ A good request names the host, the tool, and what you were trying to do:
 > the egress filter. Adding `registry.npmjs.org` to `~/.config/egress-filter/allowlist.txt` applies
 > immediately; putting it in `.devcontainer/egress-allow.txt` needs a container restart.
 
+## Working out what to ask for
+
+`egress-denied` lists every host this container asked for and was refused, with a count. That is the
+list to hand over -- it is what the build actually needed, rather than a guess. It reads only and
+needs no privileges.
+
 ## Checking what is allowed
 
 `egress-status` prints the active policy and every file it was merged from. It only reads, so it is

@@ -1,0 +1,9 @@
+# Go modules. Verified with `go env GOPROXY GOSUMDB`.
+proxy.golang.org
+sum.golang.org
+# GOPROXY defaults to "...,direct", so anything the proxy cannot serve is fetched straight from
+# the source host. Add the github preset too, or set GOPROXY without ",direct" to keep the
+# surface predictable.
+golang.org
+.golang.org
+gopkg.in

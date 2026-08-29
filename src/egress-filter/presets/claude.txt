@@ -1,0 +1,5 @@
+# Claude Code. api.anthropic.com carries both the API and the OAuth token exchange;
+# claude.ai/install.sh redirects to downloads.claude.ai, which also serves updates.
+# Taken from the hosts referenced by the shipped binary, not from documentation.
+.anthropic.com
+.claude.ai

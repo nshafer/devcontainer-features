@@ -1,0 +1,5 @@
+# Debian apt. Verified against /etc/apt/sources.list in mcr.microsoft.com/devcontainers/*.
+deb.debian.org
+security.debian.org
+# The devcontainers base images pin to dated snapshots, so apt fails without this.
+snapshot.debian.org

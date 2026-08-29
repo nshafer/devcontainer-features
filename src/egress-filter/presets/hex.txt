@@ -1,0 +1,6 @@
+# Elixir and Erlang. Verified with `mix hex.repo list` and `mix hex.config`.
+repo.hex.pm
+# The API, used by every `mix hex.*` command.
+hex.pm
+# Precompiled Erlang/Elixir builds, used by asdf and mise. Not verified.
+builds.hex.pm

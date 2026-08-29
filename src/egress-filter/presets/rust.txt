@@ -1,0 +1,3 @@
+# Rust. Covers crates.io, static.crates.io (downloads) and index.crates.io (sparse index).
+.crates.io
+crates.io

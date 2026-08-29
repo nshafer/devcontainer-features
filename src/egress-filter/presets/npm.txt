@@ -1,0 +1,4 @@
+# npm, pnpm and yarn. Verified with `npm config get registry`.
+registry.npmjs.org
+# Yarn's own registry, used by yarn v1 even when npm is configured elsewhere.
+registry.yarnpkg.com
