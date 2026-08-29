@@ -30,7 +30,6 @@ BLOCK_GPG=true
 BLOCK_X11=true
 BLOCK_IPC=true
 SWEEP_INTERVAL=1
-DROP_SUDO=true
 # shellcheck disable=SC2034
 USERNAME=root
 USER_HOME=/root
@@ -109,7 +108,6 @@ sudo_works() {
 }
 
 drop_sudo() {
-    [ "$DROP_SUDO" = true ] || return 0
     if [ "$USERNAME" = root ]; then
         warn "the remote user is root, so there is no sudo grant to drop and nothing here binds"
         return 0
@@ -384,9 +382,7 @@ status() {
 
     # Reported first among the mechanisms, because it is the one the others depend on: with sudo
     # in hand every seal above is one command from being undone.
-    if [ "$DROP_SUDO" != true ]; then
-        printf '  %-16s not dropped (option is off) -- every block above is undoable\n' "sudo"
-    elif sudo_works; then
+    if sudo_works; then
         printf '  %-16s STILL AVAILABLE to %s -- every block above is undoable\n' "sudo" "$USERNAME"
         open=$((open + 1))
     else

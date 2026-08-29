@@ -1,6 +1,6 @@
 {
   "id": "sandbox",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "name": "Sandbox (nshafer)",
   "description": "Seals the host sockets VS Code forwards into a dev container - SSH agent, GPG agent, X11 and the VS Code IPC channels - and removes the remote user's sudo grant so the seals cannot simply be undone. Mitigation, not a boundary: the socket must exist for the container to attach, so there is a short window at each attach. See the README.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/sandbox",
@@ -25,11 +25,6 @@
       "default": true,
       "description": "Block the VS Code IPC channels: vscode-ipc-* (the 'code' CLI), vscode-git-* (the git credential helper, which hands out the host's GitHub token) and vscode-remote-containers-ipc-* (the extension's own channel). Breaks 'code .' from the terminal and VS Code's git authentication."
     },
-    "dropSudo": {
-      "type": "boolean",
-      "default": true,
-      "description": "Remove the remote user's passwordless sudo grant. Without this the whole feature is decorative - a stock dev container lets the user run 'sudo chmod 666' on any sealed socket and undo it. Turning it off leaves sudo alone, and leaves every block below undoable by anything running in the container."
-    },
     "scrubEnv": {
       "type": "boolean",
       "default": true,
@@ -45,6 +40,9 @@
       "description": "Seconds between backstop sweeps. Sealing is normally driven by inotify, within about a millisecond of a socket appearing; this poll only catches what inotify missed, so it rarely needs changing."
     }
   },
+  "securityOpt": [
+    "no-new-privileges"
+  ],
   "entrypoint": "/usr/local/share/devcontainer/sandbox/entrypoint.sh",
   "postStartCommand": "/usr/local/share/devcontainer/sandbox/post-start.sh",
   "postAttachCommand": "/usr/local/share/devcontainer/sandbox/post-attach.sh",

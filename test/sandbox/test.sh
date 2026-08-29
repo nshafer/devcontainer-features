@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# The feature with its defaults, which now include dropSudo -- so this runs as a user who cannot
-# become root. That is the right vantage point rather than a limitation: every claim below is a
-# claim about what the *remote user* can no longer do, and a test that could sudo would not be
-# testing it.
+# The feature with its defaults, run as the remote user -- so this runs as a user who cannot become
+# root. That is the right vantage point rather than a limitation: every claim below is a claim about
+# what the *remote user* can no longer do, and a test that could sudo would not be testing it.
 #
-# Anything that genuinely needs root to set up lives in the sudo_kept scenario instead, which turns
-# dropSudo off precisely so it can drive the privileged paths.
+# Anything that genuinely needs root to set up lives in the privileged_paths scenario instead, which
+# runs as root precisely so it can drive the privileged paths.
 #
 # The harness runs this feature's entrypoint and lifecycle hooks, so the sweeper and the sudo drop
 # are already in place when the first check runs. These test the container as it actually comes up.
@@ -27,7 +26,6 @@ check "defaults were baked in" bash -c '
     [ "$BLOCK_GPG" = true ] || { echo "gpg: $BLOCK_GPG"; exit 1; }
     [ "$BLOCK_X11" = true ] || { echo "x11: $BLOCK_X11"; exit 1; }
     [ "$BLOCK_IPC" = true ] || { echo "ipc: $BLOCK_IPC"; exit 1; }
-    [ "$DROP_SUDO" = true ] || { echo "dropSudo: $DROP_SUDO"; exit 1; }
     [ "$USERNAME" = "$(whoami)" ] || { echo "user: $USERNAME vs $(whoami)"; exit 1; }'
 
 # ---------------------------------------------------------------------------------------------

@@ -15,7 +15,6 @@ BLOCK_GPG="${BLOCKGPGAGENT:-true}"
 BLOCK_X11="${BLOCKX11:-true}"
 BLOCK_IPC="${BLOCKVSCODEIPC:-true}"
 SCRUB_ENV="${SCRUBENV:-true}"
-DROP_SUDO="${DROPSUDO:-true}"
 SWEEP_INTERVAL="${SWEEPINTERVAL:-1}"
 
 SHARE_DIR=/usr/local/share/devcontainer/sandbox
@@ -36,7 +35,7 @@ fi
 USER_UID="$(id -u "$USERNAME" 2>/dev/null || echo 0)"
 
 echo "==> sandbox: user=$USERNAME home=$USER_HOME uid=$USER_UID"
-echo "==> sandbox: ssh=$BLOCK_SSH gpg=$BLOCK_GPG x11=$BLOCK_X11 ipc=$BLOCK_IPC scrubEnv=$SCRUB_ENV dropSudo=$DROP_SUDO"
+echo "==> sandbox: ssh=$BLOCK_SSH gpg=$BLOCK_GPG x11=$BLOCK_X11 ipc=$BLOCK_IPC scrubEnv=$SCRUB_ENV"
 
 if [ "$USERNAME" = "root" ]; then
     echo "!!! sandbox: the remote user is root, so nothing here is a real boundary -- root can" >&2
@@ -79,7 +78,6 @@ BLOCK_GPG=$BLOCK_GPG
 BLOCK_X11=$BLOCK_X11
 BLOCK_IPC=$BLOCK_IPC
 SWEEP_INTERVAL=$SWEEP_INTERVAL
-DROP_SUDO=$DROP_SUDO
 USERNAME=$USERNAME
 USER_HOME=$USER_HOME
 USER_UID=$USER_UID

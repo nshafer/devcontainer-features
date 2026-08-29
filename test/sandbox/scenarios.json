@@ -1,16 +1,14 @@
 {
-  "sudo_kept": {
+  "privileged_paths": {
     "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
-    "remoteUser": "node",
+    "remoteUser": "root",
     "features": {
-      "sandbox": {
-        "dropSudo": false
-      }
+      "sandbox": {}
     }
   },
   "channels_off": {
     "image": "mcr.microsoft.com/devcontainers/base:debian",
-    "remoteUser": "vscode",
+    "remoteUser": "root",
     "features": {
       "sandbox": {
         "blockSshAgent": false,
@@ -18,14 +16,13 @@
         "blockX11": false,
         "blockVscodeIpc": false,
         "scrubEnv": false,
-        "sweepInterval": "5",
-        "dropSudo": false
+        "sweepInterval": "5"
       }
     }
   },
   "wayland_bind_mount": {
     "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
-    "remoteUser": "node",
+    "remoteUser": "root",
     "capAdd": [
       "SYS_ADMIN"
     ],
@@ -33,9 +30,7 @@
       "apparmor=unconfined"
     ],
     "features": {
-      "sandbox": {
-        "dropSudo": false
-      }
+      "sandbox": {}
     }
   }
 }

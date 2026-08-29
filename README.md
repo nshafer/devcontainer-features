@@ -59,12 +59,11 @@ everywhere. The standalone `devcontainer` CLI reads the config and nothing else,
     "blockGpgAgent": true,
     "blockX11": true,
     "blockVscodeIpc": true,
-    "dropSudo": true,             // turning this off makes the rest decorative
     "scrubEnv": true,
     "sweepInterval": "1"          // seconds; only the backstop, sealing is inotify-driven
   },
 
-  // Needs sandbox and its dropSudo, and adds the NET_ADMIN capability. See the egress-filter notes.
+  // Needs sandbox and its sudo drop, and adds the NET_ADMIN capability. See the egress-filter notes.
   "ghcr.io/nshafer/devcontainer-features/egress-filter:1": {
     "presets": "",                // e.g. "debian,npm,go,github,claude"
     "allow": "",
@@ -209,8 +208,8 @@ project's `devcontainer.json` naming them:
 `tidewave` is deliberately not in that list. It needs a published port, and a feature cannot declare
 one — see [its notes](src/tidewave) — so it belongs in the projects that actually want it.
 
-`egress-filter` is not in it either. It adds the `NET_ADMIN` capability and needs `sandbox`'s
-`dropSudo`, so it belongs in the containers that run an agent.
+`egress-filter` is not in it either. It adds the `NET_ADMIN` capability and needs `sandbox`'s sudo
+drop, so it belongs in the containers that run an agent.
 
 `sandbox` is not in it either, for the opposite reason: it works everywhere, but it is supposed to
 break things. Signing commits, `git push` over SSH, `code .` from the container terminal, GUI apps on

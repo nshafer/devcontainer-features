@@ -17,21 +17,21 @@ check "the options reached the config" bash -c '
 check "a display socket is not touched" bash -c '
     mkdir -p /tmp/.X11-unix
     sock-bind /tmp/.X11-unix/X9
-    sudo -n /usr/local/share/devcontainer/sandbox/sandbox.sh sweep
+    /usr/local/share/devcontainer/sandbox/sandbox.sh sweep
     ls -l /tmp/.X11-unix/X9
     [ "$(stat -c %a /tmp/.X11-unix/X9)" != 0 ] || { echo "sealed despite blockX11=false"; exit 1; }'
 
 check "a gpg agent socket is not touched" bash -c '
     mkdir -p -m 700 "$HOME/.gnupg"
     sock-bind "$HOME/.gnupg/S.gpg-agent"
-    sudo -n /usr/local/share/devcontainer/sandbox/sandbox.sh sweep
+    /usr/local/share/devcontainer/sandbox/sandbox.sh sweep
     ls -l "$HOME/.gnupg/S.gpg-agent"
     [ "$(stat -c %a "$HOME/.gnupg/S.gpg-agent")" != 0 ] \
         || { echo "sealed despite blockGpgAgent=false"; exit 1; }'
 
 check "a forwarded ssh socket is not touched" bash -c '
     sock-bind /tmp/vscode-ssh-auth-off.sock
-    sudo -n /usr/local/share/devcontainer/sandbox/sandbox.sh sweep
+    /usr/local/share/devcontainer/sandbox/sandbox.sh sweep
     ls -l /tmp/vscode-ssh-auth-off.sock
     [ "$(stat -c %a /tmp/vscode-ssh-auth-off.sock)" != 0 ] \
         || { echo "sealed despite blockSshAgent=false"; exit 1; }
@@ -39,7 +39,7 @@ check "a forwarded ssh socket is not touched" bash -c '
 
 check "a vscode ipc socket is not touched" bash -c '
     sock-bind /tmp/vscode-ipc-off.sock
-    sudo -n /usr/local/share/devcontainer/sandbox/sandbox.sh sweep
+    /usr/local/share/devcontainer/sandbox/sandbox.sh sweep
     [ "$(stat -c %a /tmp/vscode-ipc-off.sock)" != 0 ] \
         || { echo "sealed despite blockVscodeIpc=false"; exit 1; }'
 

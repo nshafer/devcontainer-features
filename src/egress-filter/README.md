@@ -39,7 +39,7 @@ The directory is the mount source, so only the directory has to exist. The `allo
 the global list. It is optional, and an empty one is fine, but create it now so you have a place to
 add hosts later.
 
-This feature also needs `sandbox` and its `dropSudo`. A remote user with sudo runs `iptables -F` and
+This feature also needs `sandbox` and its sudo drop. A remote user with sudo runs `iptables -F` and
 the whole filter is gone. Use the two features together.
 
 ## Notes

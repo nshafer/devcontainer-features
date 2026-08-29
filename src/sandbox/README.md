@@ -19,7 +19,6 @@ Seals the host sockets VS Code forwards into a dev container - SSH agent, GPG ag
 | blockGpgAgent | Block the forwarded GPG agent (~/.gnupg/S.gpg-agent, .extra and S.keyboxd), by sealing the sockets just after VS Code creates them. Signed commits stop working inside the container. | boolean | true |
 | blockX11 | Block the forwarded display (/tmp/.X11-unix/X*). The socket is sealed just after VS Code creates it, not pre-empted -- pre-empting it stops the container attaching at all. GUI apps stop reaching your desktop. Wayland cannot be blocked from inside - see the README. | boolean | true |
 | blockVscodeIpc | Block the VS Code IPC channels: vscode-ipc-* (the 'code' CLI), vscode-git-* (the git credential helper, which hands out the host's GitHub token) and vscode-remote-containers-ipc-* (the extension's own channel). Breaks 'code .' from the terminal and VS Code's git authentication. | boolean | true |
-| dropSudo | Remove the remote user's passwordless sudo grant. Without this the whole feature is decorative - a stock dev container lets the user run 'sudo chmod 666' on any sealed socket and undo it. Turning it off leaves sudo alone, and leaves every block below undoable by anything running in the container. | boolean | true |
 | scrubEnv | Also unset the variables that advertise these sockets (SSH_AUTH_SOCK, DISPLAY, GIT_ASKPASS, BROWSER, VSCODE_IPC_HOOK_CLI, REMOTE_CONTAINERS_*) in every shell. Cosmetic next to the socket blocks - VS Code re-injects them - but it stops tools finding the paths by accident. | boolean | true |
 | sweepInterval | Seconds between backstop sweeps. Sealing is normally driven by inotify, within about a millisecond of a socket appearing; this poll only catches what inotify missed, so it rarely needs changing. | string | 1 |
 
@@ -42,7 +41,8 @@ forwarded channels are host-side. Set these on any machine that runs an agent in
 - Run the agent as a different Unix user than the remote user, if you can. A second user cannot
   connect to a forwarded socket at all.
 
-Keep `dropSudo` on. Without it, the rest of the feature is decorative.
+The feature always removes the sudo grant, and the container runs with `no-new-privileges`. Both
+close the same hole: a remote user who regains root undoes every seal. See below.
 
 ## What this feature does
 
@@ -93,11 +93,15 @@ reopens on every window you attach, not only the first.
 
 **All of that rests on the remote user not being root.** A stock dev container hands them
 password-less sudo, and one `sudo chmod 666` undoes every seal here. So the feature removes the
-grant (`dropSudo`, on by default). It deletes the `sudoers.d` entry, drops the user from
-`sudo`/`wheel`/`admin`, then *verifies by outcome* and strips the setuid bit from `sudo` if any
-route survived. **This is the change that turns the rest from theatre into something an agent has to
-work around rather than switch off.** It also means `sudo` stops working in the container, for you
-too.
+grant. It deletes the `sudoers.d` entry, drops the user from `sudo`/`wheel`/`admin`, then *verifies
+by outcome* and strips the setuid bit from `sudo` if any route survived. **This is the change that
+turns the rest from theatre into something an agent has to work around rather than switch off.** It
+also means `sudo` stops working in the container, for you too.
+
+The feature adds a second lock for the same reason. It sets `no-new-privileges` on the container
+through its `securityOpt`, so no setuid binary can hand back the root the sudo drop took away. This
+one is not optional either, and it needs the sudo drop to stay off your way, because it blocks
+`sudo` for everyone.
 
 What the feature *does* hold: once sealed, a UUID-named socket is closed for good. `/tmp` is sticky,
 so the remote user cannot remove a root-owned file in it at all. Recreating one gets you a socket
@@ -187,19 +191,19 @@ sandbox: forwarded host channels in this container
   sweeper          running (inotify, 1s poll backstop)
 ```
 
-**`no-new-privileges` is not part of the feature, but add it when `dropSudo` is true.** A feature's
-`securityOpt` is static metadata and cannot depend on an option. So the feature cannot key it off
-`dropSudo`. Shipping it would force it on every container, including ones that run `dropSudo: false`,
-and break their `sudo`. It stays a `devcontainer.json` opt-in.
-
-The flag blocks every setuid path, not just `sudo`. So pair it with `dropSudo: true`: the sudo grant
-is already gone, the flag removes nothing you still use, and it adds a second lock against a regained
-privilege. Do not add it with `dropSudo: false`, because it breaks `sudo`. Note that `capDrop` has no
-equivalent at all, feature or otherwise:
+**`no-new-privileges` ships with the feature.** The feature declares it in `securityOpt`, so every
+container that installs the feature gets it:
 
 ```jsonc
 "securityOpt": ["no-new-privileges"]
 ```
+
+The flag blocks every setuid path, not just `sudo`. It costs nothing here, because the feature
+already removes the sudo grant, so the flag takes away no privilege you still hold. It adds a second
+lock: a setuid binary the sudo drop missed still cannot hand back root. Setting it in the feature is
+safe only because the sudo drop is unconditional. A version with an optional sudo drop could not do
+this, because the flag breaks `sudo` for everyone. Note that `capDrop` has no equivalent at all,
+feature or otherwise.
 
 Finally, the feature is only as good as the container's user model. **It does nothing if
 `remoteUser` is root**, since root can `chmod` any tombstone back. `install.sh` says so loudly when
