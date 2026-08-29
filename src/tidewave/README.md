@@ -100,4 +100,4 @@ is worth a loud line in the creation log, not worth failing the container over.
 
 ---
 
-_Note: This file was auto-generated from the [devcontainer-feature.json](devcontainer-feature.json).  Add additional notes to a `NOTES.md`._
+_Note: This file was auto-generated from the [devcontainer-feature.json](https://github.com/nshafer/devcontainer-features/blob/main/src/tidewave/devcontainer-feature.json).  Add additional notes to a `NOTES.md`._

@@ -188,9 +188,9 @@ sandbox: forwarded host channels in this container
 ```
 
 **`no-new-privileges` is not part of the feature, but add it when `dropSudo` is true.** A feature's
-`securityOpt` is static metadata and cannot depend on an option, so shipping it would force it on
-every container, including ones that run `dropSudo: false`, and break their `sudo`. It stays a
-`devcontainer.json` opt-in.
+`securityOpt` is static metadata and cannot depend on an option. So the feature cannot key it off
+`dropSudo`. Shipping it would force it on every container, including ones that run `dropSudo: false`,
+and break their `sudo`. It stays a `devcontainer.json` opt-in.
 
 The flag blocks every setuid path, not just `sudo`. So pair it with `dropSudo: true`: the sudo grant
 is already gone, the flag removes nothing you still use, and it adds a second lock against a regained
@@ -208,4 +208,4 @@ it detects that.
 
 ---
 
-_Note: This file was auto-generated from the [devcontainer-feature.json](devcontainer-feature.json).  Add additional notes to a `NOTES.md`._
+_Note: This file was auto-generated from the [devcontainer-feature.json](https://github.com/nshafer/devcontainer-features/blob/main/src/sandbox/devcontainer-feature.json).  Add additional notes to a `NOTES.md`._

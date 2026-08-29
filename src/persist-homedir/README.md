@@ -49,4 +49,4 @@ is not, and carries on. The `~/.vscode-server` redirect still works either way.
 
 ---
 
-_Note: This file was auto-generated from the [devcontainer-feature.json](devcontainer-feature.json).  Add additional notes to a `NOTES.md`._
+_Note: This file was auto-generated from the [devcontainer-feature.json](https://github.com/nshafer/devcontainer-features/blob/main/src/persist-homedir/devcontainer-feature.json).  Add additional notes to a `NOTES.md`._
