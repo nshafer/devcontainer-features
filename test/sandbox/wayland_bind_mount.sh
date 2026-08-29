@@ -45,7 +45,7 @@ if [ "$CAN_MOUNT" = no ]; then
     # or a broken build would show up here as a pass.
     check "the feature is installed even though the mount checks were skipped" bash -c '
         test -x /usr/local/share/nshafer-sandbox/sandbox.sh
-        sandbox-report'
+        sandbox-status'
 
     reportResults
     exit 0
@@ -95,7 +95,7 @@ check "a full sweep also leaves it alone" bash -c '
 check "the report surfaces a mounted wayland socket as reachable" bash -c '
     sudo -n mkdir -p /tmp/wl && sudo -n touch /tmp/wl/vscode-wayland-abc.sock
     sudo -n mount --bind /tmp/pretend-host-wayland.sock /tmp/wl/vscode-wayland-abc.sock
-    out=$(sandbox-report || true)
+    out=$(sandbox-status || true)
     echo "$out"
     sudo -n umount /tmp/wl/vscode-wayland-abc.sock
     echo "$out" | grep -q "wayland display" || { echo "wayland not reported"; exit 1; }

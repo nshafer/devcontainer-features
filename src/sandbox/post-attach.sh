@@ -18,7 +18,7 @@ SHARE_DIR=/usr/local/share/nshafer-sandbox
 # check-manifest reads.
 if ! "$SHARE_DIR/sandbox.sh" check-manifest "$$"; then
     echo "!!! sandbox: this window forwarded a channel that is still open. Full state:" >&2
-    "$SHARE_DIR/sandbox.sh" report || true
+    "$SHARE_DIR/sandbox.sh" status || true
 fi
 
 exit 0

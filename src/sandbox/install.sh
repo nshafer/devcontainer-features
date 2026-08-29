@@ -86,13 +86,13 @@ USER_UID=$USER_UID
 EOF
 chmod 0644 "$SHARE_DIR/config"
 
-# A read-only view of the truth, for a human or a test: `sandbox-report` exits non-zero if any
+# A read-only view of the truth, for a human or a test: `sandbox-status` exits non-zero if any
 # channel is still reachable. Unprivileged -- it only stats paths.
-cat > /usr/local/bin/sandbox-report <<EOF
+cat > /usr/local/bin/sandbox-status <<EOF
 #!/bin/sh
-exec $SHARE_DIR/sandbox.sh report
+exec $SHARE_DIR/sandbox.sh status
 EOF
-chmod 0755 /usr/local/bin/sandbox-report
+chmod 0755 /usr/local/bin/sandbox-status
 
 # The environment scrub, hooked into every kind of shell. All four hooks live in /etc, never in
 # \$HOME: a persisted home volume masks whatever the image wrote to ~/.bashrc, so a scrub installed

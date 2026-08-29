@@ -18,7 +18,7 @@ check "the scripts and config landed" bash -c '
     test -x /usr/local/share/nshafer-sandbox/entrypoint.sh
     test -x /usr/local/share/nshafer-sandbox/post-start.sh
     test -x /usr/local/share/nshafer-sandbox/post-attach.sh
-    test -x /usr/local/bin/sandbox-report
+    test -x /usr/local/bin/sandbox-status
     test -r /usr/local/share/nshafer-sandbox/config'
 
 check "defaults were baked in" bash -c '
@@ -219,13 +219,13 @@ check "a new socket is sealed in milliseconds, not on the next poll" bash -c '
     # The poll backstop is 1000ms, so anything well under that proves inotify drove it.
     [ "$ms" -lt 500 ] || { echo "took ${ms}ms -- that is the poll, not inotify"; exit 1; }'
 
-check "sandbox-report says every channel is blocked" bash -c '
-    sandbox-report | tee /dev/stderr
-    sandbox-report | grep -qE "ssh agent +blocked"
-    sandbox-report | grep -qE "gpg agent +blocked"
-    sandbox-report | grep -qE "x11 display +blocked"
-    sandbox-report | grep -qE "vscode ipc +blocked"
-    sandbox-report | grep -qE "sudo +dropped"'
+check "sandbox-status says every channel is blocked" bash -c '
+    sandbox-status | tee /dev/stderr
+    sandbox-status | grep -qE "ssh agent +blocked"
+    sandbox-status | grep -qE "gpg agent +blocked"
+    sandbox-status | grep -qE "x11 display +blocked"
+    sandbox-status | grep -qE "vscode ipc +blocked"
+    sandbox-status | grep -qE "sudo +dropped"'
 
 # ---------------------------------------------------------------------------------------------
 # The environment scrub. The weakest of the three layers and not a control -- VS Code re-injects

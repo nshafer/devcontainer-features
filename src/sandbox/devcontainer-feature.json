@@ -1,6 +1,6 @@
 {
   "id": "sandbox",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "name": "Sandbox (nshafer)",
   "description": "Seals the host sockets VS Code forwards into a dev container - SSH agent, GPG agent, X11 and the VS Code IPC channels - and removes the remote user's sudo grant so the seals cannot simply be undone. Mitigation, not a boundary: the socket must exist for the container to attach, so there is a short window at each attach. See the README.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/sandbox",

@@ -252,13 +252,13 @@ project.
 **Write that object with single quotes.** The devcontainer CLI emits option values into the
 generated Dockerfile without escaping them, so a value containing double quotes arrives with the
 quotes collapsed and the JSON destroyed; the feature translates `'` to `"` on the way in. The cost
-is that a value containing an apostrophe cannot be expressed. An unparseable value fails the build
+is that a value containing an apostrophe cannot be expressed. An unparsable value fails the build
 with the received text, rather than producing a container whose CLI errors on startup.
 
 Seeding runs _before_ the installer on purpose: the installer writes `autoUpdatesChannel` into the
 same file and merges rather than replaces, so both survive. It is also the last time the feature
 touches the file — from first run the CLI owns it, writing theme, model and update channel back.
-Expect the CLI to normalise what it finds: `'model': 'opus'` becomes `"opus[1m]"`.
+Expect the CLI to normalize what it finds: `'model': 'opus'` becomes `"opus[1m]"`.
 
 A persisted home volume with existing content masks the image's copy, so a container whose volume
 predates a settings change will not see it until that volume is recreated.
@@ -369,7 +369,7 @@ can work and the last of which is harmful. So three things carry the explanation
 
 - the proxy's 403 page names the feature, the refused host and the remedy (plain HTTP, and anything
   that surfaces the body — npm included)
-- `/usr/local/share/nshafer-egress-filter/BLOCKED.md` says the same at length, tool-agnostically,
+- `/usr/local/share/nshafer-egress-filter/BLOCKED.md` says the same at length, tool-agnostic,
   and is pointed at from the postAttach output
 - the same text is installed as a Claude skill at `~/.claude/skills/egress-filter/SKILL.md`, written
   at *container start* rather than build time, because `persist-homedir` masks anything the image
@@ -514,7 +514,7 @@ zero, and **one connection is enough** to have your host's `ssh-agent` sign some
 reopens on every window you attach, not just the first.
 
 **All of that rests on the remote user not being root**, and a stock dev container hands them
-passwordless sudo — one `sudo chmod 666` undoes every seal here. So the feature removes the grant
+password-less sudo — one `sudo chmod 666` undoes every seal here. So the feature removes the grant
 (`dropSudo`, on by default): it deletes the `sudoers.d` entry, drops the user from `sudo`/`wheel`/
 `admin`, then *verifies by outcome* and strips the setuid bit from `sudo` if any route survived.
 **This is the change that turns the rest from theatre into something an agent has to work around
@@ -556,8 +556,8 @@ background loop re-deleting every 30 seconds. This takes the socket instead, `ch
 | agent deletes it | n/a | `EPERM` — `/tmp` is sticky and the file is root's |
 | VS Code recreates it | yes | `EADDRINUSE` |
 
-**Everything is sealed after the fact, never pre-empted.** The obvious refinement is to take the
-directories these sockets live in — `/tmp/.X11-unix` and `~/.gnupg` root-owned and unwritable — so
+**Everything is sealed after the fact, never preempted.** The obvious refinement is to take the
+directories these sockets live in — `/tmp/.X11-unix` and `~/.gnupg` root-owned and read-only — so
 the socket can never be created at all. That is a stronger boundary, it works, and it makes the
 container impossible to open: VS Code's helper creates those sockets while attaching, fails, and
 dies, leaving **"Configuring Dev Container" on screen forever** with no error and no timeout. So the
@@ -627,7 +627,7 @@ scrub installed there works exactly once and then quietly stops.
 Check the result at any time — it exits non-zero if anything is still reachable:
 
 ```console
-$ sandbox-report
+$ sandbox-status
 sandbox: forwarded host channels in this container
   ssh agent        blocked
   gpg agent        blocked

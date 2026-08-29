@@ -21,6 +21,6 @@ fi
 # $$ is this script's pid: BASH_ENV has already scrubbed the variables out of this
 # shell, but the kernel's copy of what it was exec'd with still has them.
 "$SHARE_DIR/sandbox.sh" check-manifest "$$" || true
-"$SHARE_DIR/sandbox.sh" report || true
+"$SHARE_DIR/sandbox.sh" status || true
 
 exit 0

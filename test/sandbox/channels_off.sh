@@ -56,7 +56,7 @@ check "BASH_ENV is still set, since containerEnv cannot be conditional" bash -c 
     test -r "$BASH_ENV"'
 
 check "the report says unblocked rather than claiming success" bash -c '
-    out=$(sandbox-report || true)
+    out=$(sandbox-status || true)
     echo "$out"
     echo "$out" | grep -qE "ssh agent +not blocked \(option is off\)"
     echo "$out" | grep -qE "gpg agent +not blocked \(option is off\)"

@@ -15,7 +15,7 @@ check "sudo survives when the option is off" bash -c '
     sudo -n true || { echo "sudo was dropped despite dropSudo=false"; exit 1; }'
 
 check "the report says so rather than claiming success" bash -c '
-    out=$(sandbox-report || true)
+    out=$(sandbox-status || true)
     echo "$out"
     echo "$out" | grep -qE "sudo +not dropped \(option is off\)"'
 
@@ -71,7 +71,7 @@ check "the warning names the host-side setting, the only real fix for wayland" b
 # The report has to be able to fail, or it is decoration. The daemon is still stopped here.
 check "the report fails loudly when a channel is reachable" bash -c '
     sock-bind /tmp/vscode-ssh-auth-open.sock
-    out=$(sandbox-report) && { echo "report exited 0 with a channel open:"; echo "$out"; exit 1; }
+    out=$(sandbox-status) && { echo "report exited 0 with a channel open:"; echo "$out"; exit 1; }
     echo "$out"
     echo "$out" | grep -q "REACHABLE"
     echo "$out" | grep -q "NOT RUNNING"'

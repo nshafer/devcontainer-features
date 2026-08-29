@@ -332,7 +332,7 @@ EOF
 
 # Phrased as "what is still reachable" rather than "what did I do", because the second question is
 # the one that can lie: a channel is only blocked if the path is unusable right now.
-report() {
+status() {
     local open=0
 
     channel() {
@@ -481,7 +481,7 @@ case "${1:-sweep}" in
     drop-sudo)      drop_sudo ;;
     sweep)          block_fixed; sweep ;;
     daemon)         daemon ;;
-    report)         report ;;
+    status)         status ;;
     check-manifest) check_manifest "${2:-$$}" ;;
-    *)              echo "usage: sandbox.sh {repair|drop-sudo|block-fixed|sweep|daemon|report|check-manifest}" >&2; exit 2 ;;
+    *)              echo "usage: sandbox.sh {repair|drop-sudo|block-fixed|sweep|daemon|status|check-manifest}" >&2; exit 2 ;;
 esac
