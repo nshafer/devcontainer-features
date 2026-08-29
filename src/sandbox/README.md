@@ -71,8 +71,8 @@ container can, because the hole is in how VS Code forwards them.
 
 The reason is structural. VS Code's helper runs **as the remote user** and calls
 `net.Server.listen()` on a socket inside the container. Anything else that runs as that user may
-`connect()` to it. The socket has to exist, because a path the helper cannot write is a container
-you cannot attach to. That is not a theory. It is what `1.0.0` did:
+`connect()` to it. The socket has to exist. A path the helper cannot write is a container you cannot
+attach to. Block the path, and the helper fails like this:
 
 ```
 Container server: Error: listen EACCES: permission denied /tmp/.X11-unix/X0
@@ -131,27 +131,14 @@ the socket can never be created. That is a stronger boundary, and it works, but 
 container impossible to open. VS Code's helper creates those sockets while attaching, fails, and
 dies. It leaves **"Configuring Dev Container" on screen forever**, with no error and no timeout. So
 the feature lets the forwarding succeed and takes the channel a moment later. Blocking that starts a
-second late beats blocking that never lets you open the editor. `1.0.0` had it the other way round.
-`1.0.1` does not, and `test/sandbox/test.sh` now checks that the directories stay writable before it
-checks anything else.
+second late beats blocking that never lets you open the editor. `test/sandbox/test.sh` checks that
+the directories stay writable before it checks anything else.
 
 The cost is stated rather than hidden. With the directory writable, the user who owns that directory
 can unlink a tombstone inside it. So the fixed-name channels — X11 and GPG — are open for the moment
 between the helper creating the socket and inotify firing, rather than never. The UUID-named
 channels keep the stronger guarantee, because `/tmp` is sticky and the user cannot remove a
 root-owned file in it at all.
-
-**If you ran `1.0.0`, it left damage that outlives the rebuild.** That version made
-`/tmp/.X11-unix` and `~/.gnupg` root-owned, and `persist-homedir` keeps `/home` on a named volume.
-So a sealed `~/.gnupg` survives every rebuild and keeps the container unattachable, with a new
-symptom:
-
-```
-Container server: [Error: EACCES: permission denied, unlink '/home/<user>/.gnupg/S.gpg-agent']
-```
-
-`1.0.2` repairs it at container start: it hands any directory it manages that is root-owned back to
-the remote user. Recreating the home volume works too, at the cost of everything else in it.
 
 **The rest needs a daemon, not a bounded loop.** The remaining names carry a fresh UUID per window,
 so every VS Code window you attach forwards a whole new set, hours after the first. A loop that runs

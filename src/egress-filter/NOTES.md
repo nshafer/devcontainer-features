@@ -102,9 +102,8 @@ Hosts this container asked for and was refused:
          1  objects.githubusercontent.com
 ```
 
-It only reads and needs no privileges — which required a fix. tinyproxy drops to its own uid before
-it opens its log, so it silently never wrote a root-owned log file, and **every denial was lost**.
-The feature now pre-creates the log owned by the proxy user and world-readable.
+It only reads and needs no privileges. The feature pre-creates the proxy log owned by the proxy user
+and world-readable, so `egress-denied` can read every refusal.
 
 ### Who can widen the list, and when
 
