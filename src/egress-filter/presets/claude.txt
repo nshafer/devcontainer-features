@@ -2,4 +2,5 @@
 # claude.ai/install.sh redirects to downloads.claude.ai, which also serves updates.
 # Taken from the hosts referenced by the shipped binary, not from documentation.
 .anthropic.com
+.claude.com
 .claude.ai
