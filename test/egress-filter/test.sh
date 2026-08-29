@@ -30,6 +30,30 @@ check "the baseline is merged, so VS Code can still reach the marketplace" bash 
     grep -q "visualstudio" /etc/nshafer-egress-filter/allow.regex'
 
 # The global list is a file on the host, mounted read-only.
+# allow.regex is what the proxy reads and is unreadable at a glance: anchored, escaped, sorted, with
+# no trace of where any line came from. The concatenated file answers "why is this host allowed" and
+# "did my edit land", which is the question anyone actually has.
+check "the concatenated allowlist is written, with a header per source" bash -c '
+    f=/etc/nshafer-egress-filter/allowlist.txt
+    test -r "$f" || { echo "not written"; exit 1; }
+    grep -q "^# baseline: " "$f" || { echo "no baseline header"; sed -n 1,20p "$f"; exit 1; }
+    grep -q "^# global: "   "$f" || { echo "no global header"; exit 1; }
+    # The header names the host-side path, not the mount, for the same reason the status does.
+    grep -q "^# global: ~/.config/egress-filter/allowlist.txt" "$f"         || { echo "global header does not name the host path"; grep "^# global" "$f"; exit 1; }
+    grep -q "rewritten on every reload" "$f" || { echo "no do-not-edit warning"; exit 1; }'
+
+check "it carries the source comments through, not just the hosts" bash -c '
+    f=/etc/nshafer-egress-filter/allowlist.txt
+    # The baseline explains itself; that explanation is the useful part when reading this file.
+    grep -q "cannot reach the marketplace" "$f" || { echo "source comments were stripped"; exit 1; }
+    grep -q "marketplace.visualstudio.com" "$f" || { echo "baseline hosts missing"; exit 1; }'
+
+check "status points at it, so it can be found" bash -c '
+    egress-status | tee /dev/stderr         | grep -qE "allowlist +[0-9]+ patterns \(/etc/nshafer-egress-filter/allowlist.txt\)"'
+
+check "it is readable without root" bash -c '
+    head -1 /etc/nshafer-egress-filter/allowlist.txt >/dev/null || { echo "cannot read as $(whoami)"; exit 1; }'
+
 check "the global list on the host is merged" bash -c '
     test -r /mnt/egress-filter/allowlist.txt || { echo "global list not mounted"; exit 1; }
     egress-status | grep -q "global:"'

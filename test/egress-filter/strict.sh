@@ -42,4 +42,13 @@ check "allowDns=false leaves no accept on port 53 in the chain" bash -c '
 check "the proxy still reaches allowed hosts without local DNS" bash -c '
     code=$(fetch example.com); echo "  example.com via proxy=$code"; [ "$code" = 200 ]'
 
+# deny is the one section that is not additive, so the file records it as a removal rather than
+# silently omitting the host and leaving you wondering where it went.
+check "a denied host is recorded as removed, not silently dropped" bash -c '
+    f=/etc/nshafer-egress-filter/allowlist.txt
+    grep -q "REMOVED from everything above" "$f" || { echo "no deny section"; exit 1; }
+    grep -q "^# removed: .iana.org" "$f" || { echo "deny entry not listed"; grep -A3 REMOVED "$f"; exit 1; }
+    # ...and it really is gone from what the proxy reads.
+    ! grep -q "iana" /etc/nshafer-egress-filter/allow.regex || { echo "still in allow.regex"; exit 1; }'
+
 reportResults

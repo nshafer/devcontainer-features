@@ -309,6 +309,29 @@ Two that are easy to get wrong and are handled in the presets: `go` needs the *s
 well as the proxy, because `GOPROXY` ends in `,direct`; and `docker` needs three hosts, since
 missing the CDN fails only *after* authenticating.
 
+**`/etc/nshafer-egress-filter/allowlist.txt` shows exactly what applied.** `allow.regex` is what the
+proxy reads and is unreadable at a glance — anchored, escaped, sorted, with no trace of where any
+line came from. The concatenated file is the same content before that transformation, every source
+in merge order behind a header, with each source's own comments intact:
+
+```
+# ============================================================================
+# preset 'go': /usr/local/share/nshafer-egress-filter/presets/go.txt
+# ============================================================================
+# Go modules. Verified with `go env GOPROXY GOSUMDB`.
+proxy.golang.org
+...
+# ============================================================================
+# option: deny, from devcontainer.json -- REMOVED from everything above
+# ============================================================================
+# removed: gopkg.in
+```
+
+`egress-status` names it on the pattern-count line, so it is findable without knowing it exists. It
+is rewritten on every reload and says so — the thing to edit is whichever source the header points
+at. `deny` is recorded as a removal rather than a silent omission, since a host quietly missing from
+a merged list is the hardest kind of allowlist question to answer.
+
 **`egress-denied` is how you build a list from evidence.** It prints every host the container asked
 for and was refused, with counts, so you allow what the build actually needed rather than a generic
 superset:
