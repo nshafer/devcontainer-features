@@ -162,10 +162,15 @@ sandbox: forwarded host channels in this container
   sweeper          running (inotify, 1s poll backstop)
 ```
 
-**`no-new-privileges` is not part of the feature**, though it pairs well with it. A feature's
-`securityOpt` is static metadata and cannot depend on an option, so shipping it would force it on
-every container and break `sudo` everywhere. It is one line in `devcontainer.json` when you want it.
-Note that `capDrop` has no equivalent at all, feature or otherwise:
+**`no-new-privileges` is not part of the feature, but add it when `dropSudo` is true.** A feature's
+`securityOpt` is static metadata and cannot depend on an option. So the feature cannot key it off
+`dropSudo`. Shipping it would force it on every container, including ones that run `dropSudo: false`,
+and break their `sudo`. It stays a `devcontainer.json` opt-in.
+
+The flag blocks every setuid path, not just `sudo`. So pair it with `dropSudo: true`: the sudo grant
+is already gone, the flag removes nothing you still use, and it adds a second lock against a regained
+privilege. Do not add it with `dropSudo: false`, because it breaks `sudo`. Note that `capDrop` has no
+equivalent at all, feature or otherwise:
 
 ```jsonc
 "securityOpt": ["no-new-privileges"]
