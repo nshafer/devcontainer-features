@@ -18,6 +18,7 @@ Installs the Tidewave CLI at build time and starts it on every container start, 
 | version | Version to install: 'latest', or an exact X.Y.Z matching a tidewave_app release tag. | string | latest |
 | port | Port the CLI listens on inside the container. It has to be published to the identical port number on the host -- the CLI rejects a request whose Origin names a different port -- so add "appPort": ["127.0.0.1:9000:9000"] to devcontainer.json. | string | 9000 |
 | allowRemoteAccess | Pass --allow-remote-access, which binds 0.0.0.0 instead of 127.0.0.1. Required for a published port to reach it: Docker forwards to the container's bridge address, not to its loopback. The CLI still rejects requests whose Origin is not localhost. | boolean | true |
+| debug | Pass --debug, which makes the CLI log what it does to /tmp/tidewave.log. Off by default, because a healthy run is silent and the log is only read when something failed. | boolean | false |
 | autostart | Start the CLI at postStart. Turn off to install the binary only and run 'tidewave' yourself. | boolean | true |
 
 ## Host setup
@@ -51,6 +52,7 @@ to `/usr/local/bin/tidewave`. A `postStartCommand` starts it on every container 
 | `version`           | `latest` | Or an exact `X.Y.Z` matching a `tidewave_app` release tag. A tag that does not exist fails the build. |
 | `port`              | `9000`   | |
 | `allowRemoteAccess` | `true`   | |
+| `debug`             | `false`  | On passes `--debug`, so the CLI logs what it does to `/tmp/tidewave.log`. |
 | `autostart`         | `true`   | Off installs the binary and starts nothing. |
 
 **The published port has to be the same number on both sides.** `9000:9000`, never `9411:9000`. The
@@ -94,7 +96,9 @@ lifecycle hook is the workspace folder. That is also why this is not the `entryp
 An entrypoint runs as root, from `/`, before the workspace matters.
 
 Startup goes to `/tmp/tidewave.log`, stamped with the command and time, because the CLI itself is
-silent on a healthy run. Nothing in the start script exits non-zero. A bridge that failed to come up
+silent on a healthy run. Turn `debug` on to make it talk: the CLI then writes what it does to the
+same file. The flag is baked in at build time, so a change to it needs a rebuild, and the log is
+truncated on each start. Nothing in the start script exits non-zero. A bridge that failed to come up
 is worth a loud line in the creation log, not worth failing the container over.
 
 

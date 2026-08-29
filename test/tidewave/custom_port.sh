@@ -10,8 +10,18 @@ check "allowRemoteAccess=false drops the flag" bash -c '
     . /usr/local/share/devcontainer/tidewave/config
     case "$ARGS" in *--allow-remote-access*) echo "args: $ARGS"; exit 1;; esac'
 
+# This scenario carries every boolean off its default, so it is where flag composition gets
+# checked. debug=true is the third flag, and the checks below prove it reaches the command line
+# and that the CLI still comes up with it.
+check "debug=true adds the flag" bash -c '
+    . /usr/local/share/devcontainer/tidewave/config
+    case "$ARGS" in *--debug*) ;; *) echo "args: $ARGS"; exit 1;; esac'
+
 check "post-start brings it up on the custom port" bash -c '
     /usr/local/share/devcontainer/tidewave/post-start.sh | grep -q "listening on 9876"'
+
+check "the log records the debug flag" bash -c '
+    grep -q -- "--debug" /tmp/tidewave.log'
 
 check "it reports the custom port" bash -c '
     curl -sf --max-time 5 -X POST http://127.0.0.1:9876/about | grep -q "\"http_port\":9876"'

@@ -24,6 +24,7 @@ set -euo pipefail
 VERSION="${VERSION:-latest}"
 PORT="${PORT:-9000}"
 ALLOW_REMOTE_ACCESS="${ALLOWREMOTEACCESS:-true}"
+DEBUG="${DEBUG:-false}"
 AUTOSTART="${AUTOSTART:-true}"
 
 SHARE_DIR=/usr/local/share/devcontainer/tidewave
@@ -65,7 +66,7 @@ else
     URL="$RELEASES/download/v${VERSION#v}/tidewave-cli-$ARCH-unknown-linux-$LIBC"
 fi
 
-echo "==> tidewave: arch=$ARCH libc=$LIBC version=$VERSION port=$PORT autostart=$AUTOSTART"
+echo "==> tidewave: arch=$ARCH libc=$LIBC version=$VERSION port=$PORT debug=$DEBUG autostart=$AUTOSTART"
 
 if ! command -v curl >/dev/null 2>&1; then
     echo "==> tidewave: installing curl"
@@ -97,6 +98,9 @@ mv -f "$BINARY.new" "$BINARY"
 ARGS="--port $PORT"
 if [ "$ALLOW_REMOTE_ACCESS" = "true" ]; then
     ARGS="$ARGS --allow-remote-access"
+fi
+if [ "$DEBUG" = "true" ]; then
+    ARGS="$ARGS --debug"
 fi
 
 install -d "$SHARE_DIR"

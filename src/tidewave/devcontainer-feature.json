@@ -1,6 +1,6 @@
 {
   "id": "tidewave",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "name": "Tidewave (nshafer)",
   "description": "Installs the Tidewave CLI at build time and starts it on every container start, so the Tidewave app on the host can drive the project inside the container.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/tidewave",
@@ -26,6 +26,11 @@
       "type": "boolean",
       "default": true,
       "description": "Pass --allow-remote-access, which binds 0.0.0.0 instead of 127.0.0.1. Required for a published port to reach it: Docker forwards to the container's bridge address, not to its loopback. The CLI still rejects requests whose Origin is not localhost."
+    },
+    "debug": {
+      "type": "boolean",
+      "default": false,
+      "description": "Pass --debug, which makes the CLI log what it does to /tmp/tidewave.log. Off by default, because a healthy run is silent and the log is only read when something failed."
     },
     "autostart": {
       "type": "boolean",

@@ -29,6 +29,7 @@ to `/usr/local/bin/tidewave`. A `postStartCommand` starts it on every container 
 | `version`           | `latest` | Or an exact `X.Y.Z` matching a `tidewave_app` release tag. A tag that does not exist fails the build. |
 | `port`              | `9000`   | |
 | `allowRemoteAccess` | `true`   | |
+| `debug`             | `false`  | On passes `--debug`, so the CLI logs what it does to `/tmp/tidewave.log`. |
 | `autostart`         | `true`   | Off installs the binary and starts nothing. |
 
 **The published port has to be the same number on both sides.** `9000:9000`, never `9411:9000`. The
@@ -72,5 +73,7 @@ lifecycle hook is the workspace folder. That is also why this is not the `entryp
 An entrypoint runs as root, from `/`, before the workspace matters.
 
 Startup goes to `/tmp/tidewave.log`, stamped with the command and time, because the CLI itself is
-silent on a healthy run. Nothing in the start script exits non-zero. A bridge that failed to come up
+silent on a healthy run. Turn `debug` on to make it talk: the CLI then writes what it does to the
+same file. The flag is baked in at build time, so a change to it needs a rebuild, and the log is
+truncated on each start. Nothing in the start script exits non-zero. A bridge that failed to come up
 is worth a loud line in the creation log, not worth failing the container over.

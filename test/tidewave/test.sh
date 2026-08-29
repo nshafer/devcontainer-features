@@ -20,7 +20,8 @@ check "default flags were baked in" bash -c '
     . /usr/local/share/devcontainer/tidewave/config
     [ "$AUTOSTART" = true ] || { echo "autostart: $AUTOSTART"; exit 1; }
     [ "$PORT" = 9000 ]      || { echo "port: $PORT"; exit 1; }
-    case "$ARGS" in *--allow-remote-access*) ;; *) echo "args: $ARGS"; exit 1;; esac'
+    case "$ARGS" in *--allow-remote-access*) ;; *) echo "args: $ARGS"; exit 1;; esac
+    case "$ARGS" in *--debug*) echo "args: $ARGS"; exit 1;; esac'
 
 check "post-start brings it up" bash -c '
     out=$(/usr/local/share/devcontainer/tidewave/post-start.sh)
