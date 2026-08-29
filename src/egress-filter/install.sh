@@ -54,7 +54,7 @@ command -v tinyproxy >/dev/null 2>&1 || missing="$missing tinyproxy"
 command -v iptables  >/dev/null 2>&1 || missing="$missing iptables"
 
 if [ -n "$missing" ]; then
-    echo "==> egress-filter: installing$missing"
+    echo "==> egress-filter: installing $missing"
     if command -v apt-get >/dev/null 2>&1; then
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -y

@@ -8,10 +8,12 @@
 set -uo pipefail
 SHARE_DIR=/usr/local/share/nshafer-egress-filter
 "$SHARE_DIR/egress.sh" status || true
-echo "==> egress-filter: to allow a host, add it to the global list on your host machine (applies"
-echo "    live), or to the project list and restart the container."
-echo "    A blocked request shows up as a bare 403 -- see"
-echo "    /usr/local/share/nshafer-egress-filter/BLOCKED.md"
-echo "    'egress-denied' lists what has actually been refused, which is the best way to build"
-echo "    an allowlist -- from evidence rather than guesswork."
+echo
+echo "==> egress-filter: to allow a host:"
+echo "      - add a preset to the feature's devcontainer-feature.json (container restart required)"
+echo "      - global list at ~/.config/egress-filter/allowlist.txt on host (applies immediately)"
+echo "      - project list: .devcontainer/egress-allow.txt in the repo (container restart required)"
+echo
+echo " ==> egress-filter: list of blocked requests and counts is available with 'egress-denied' in the container"
+echo
 exit 0

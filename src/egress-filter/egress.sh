@@ -36,6 +36,13 @@ USER_HOME=/root
 [ -r "$CONFIG" ] && . "$CONFIG"
 
 GLOBAL_LIST="${EGRESS_GLOBAL_LIST:-/mnt/egress-filter/allowlist.txt}"  # read-only mount
+# What to *print* for the global list. The container path is where it is mounted, which is no help
+# to the person who has to edit it -- they can only reach it from the other side of the mount. The
+# status output names the file they can actually open.
+# The tilde is meant to stay literal: this is display text naming a path on the *host's* home
+# directory, which this script never opens and could not expand correctly if it tried.
+# shellcheck disable=SC2088
+GLOBAL_LIST_HOST="~/.config/egress-filter/allowlist.txt"
 # Overridable after the config is sourced, the same way GLOBAL_LIST is, so the preset
 # merge can be exercised without rebuilding the image.
 PRESETS="${EGRESS_PRESETS:-$PRESETS}"
@@ -121,9 +128,9 @@ build_list() {
 
     if [ -r "$GLOBAL_LIST" ]; then
         cat "$GLOBAL_LIST" >> "$tmp"
-        echo "global:   $GLOBAL_LIST" >> "$SOURCES_FILE"
+        echo "global:   $GLOBAL_LIST_HOST (on your machine)" >> "$SOURCES_FILE"
     else
-        echo "global:   $GLOBAL_LIST (absent)" >> "$SOURCES_FILE"
+        echo "global:   $GLOBAL_LIST_HOST (on your machine -- no file there yet)" >> "$SOURCES_FILE"
     fi
 
     # A glob, because a feature's entrypoint is never told the workspace folder -- it runs before
@@ -137,7 +144,8 @@ build_list() {
             found=yes
         fi
     done
-    [ "$found" = yes ] || echo "project:  $PROJECT_ALLOWLIST (none matched)" >> "$SOURCES_FILE"
+    [ "$found" = yes ] \
+        || echo "project:  .devcontainer/egress-allow.txt (in this repo -- none yet)" >> "$SOURCES_FILE"
 
     if [ -n "$ALLOW" ]; then
         echo "$ALLOW" | tr ',' '\n' >> "$tmp"

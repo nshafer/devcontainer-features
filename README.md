@@ -283,6 +283,7 @@ firewall change, so nothing is briefly open while you edit.
 | source | where | for |
 | --- | --- | --- |
 | baseline | built in, `baseline: false` to drop | what VS Code needs to attach and install extensions |
+| presets | `presets` in `devcontainer.json` | whole ecosystems by name — `debian`, `npm`, `go`, … |
 | global | `~/.config/egress-filter/allowlist.txt` on the host, mounted read-only | every container on this machine |
 | project | `.devcontainer/egress-allow.txt` in the repo | this project |
 | option | `allow` / `deny` in `devcontainer.json` | this container |
