@@ -14,6 +14,6 @@ echo "      - add a preset to the feature's devcontainer-feature.json (container
 echo "      - global list at ~/.config/egress-filter/allowlist.txt on host (applies immediately)"
 echo "      - project list: .devcontainer/egress-allow.txt in the repo (container restart required)"
 echo
-echo " ==> egress-filter: list of blocked requests and counts is available with 'egress-denied' in the container"
+echo "==> egress-filter: list of blocked requests and counts is available with 'egress-denied' in the container"
 echo
 exit 0
