@@ -231,6 +231,7 @@ Group $PROXY_USER
 Port $PROXY_PORT
 Listen 127.0.0.1
 Timeout 600
+MaxClients 512
 Allow 127.0.0.1
 ConnectPort 443
 ConnectPort 80
