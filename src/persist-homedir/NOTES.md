@@ -1,22 +1,3 @@
-
-# Persistent home directory (nshafer) (persist-homedir)
-
-Keeps /home on a named volume so shell history, caches and tool installs survive a rebuild, while keeping the VS Code server out of it so extensions reinstall fresh.
-
-## Example Usage
-
-```json
-"features": {
-    "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {}
-}
-```
-
-## Options
-
-| Options Id | Description | Type | Default Value |
-|-----|-----|-----|-----|
-
-
 ## Host setup
 
 None. This feature uses named volumes, and the container runtime creates those on first use. You
@@ -45,8 +26,3 @@ whose folders have the same basename share one volume.
 
 The remote user's home must be under `/home` for the volume to cover it. `install.sh` warns when it
 is not, and carries on. The `~/.vscode-server` redirect still works either way.
-
-
----
-
-_Note: This file was auto-generated from the [devcontainer-feature.json](devcontainer-feature.json).  Add additional notes to a `NOTES.md`._

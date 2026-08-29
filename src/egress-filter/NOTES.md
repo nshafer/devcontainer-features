@@ -1,29 +1,3 @@
-
-# Egress filter (nshafer) (egress-filter)
-
-Default-deny outbound networking, with a hostname allowlist merged from a global list on the host, a per-project list in the repo, and a baseline that keeps VS Code working. Enforced by an in-container firewall, so an agent that ignores HTTP_PROXY simply cannot connect.
-
-## Example Usage
-
-```json
-"features": {
-    "ghcr.io/nshafer/devcontainer-features/egress-filter:1": {}
-}
-```
-
-## Options
-
-| Options Id | Description | Type | Default Value |
-|-----|-----|-----|-----|
-| presets | Curated blocks of hostnames for common ecosystems, comma separated. Available: debian, ubuntu, alpine, npm, hex, go, python, rust, github, gitlab, docker, claude. Saves maintaining forty hostnames by hand; an unknown name is a warning, not a silent no-op. | string | - |
-| allow | Extra hostnames to allow, comma separated, on top of the lists. A leading dot means the domain and its subdomains: '.github.com,pypi.org'. | string | - |
-| deny | Hostnames to remove from the merged allowlist, comma separated. Applied last, so it overrides the global, project and baseline lists. | string | - |
-| baseline | Include the built-in baseline that keeps VS Code itself working - the marketplace, extension CDNs and update hosts. Without it the server cannot install extensions, and attaching may hang. | boolean | true |
-| projectAllowlist | Where the per-project list lives inside the container. A glob, because a feature's entrypoint is not told the workspace folder. Read once at container start and never re-read - it lives in the repo, where the container's own user can write it. See the README. | string | /workspaces/*/.devcontainer/egress-allow.txt |
-| allowDns | Let the container resolve names directly, against the resolvers in dnsServers only - port 53 to any other host is refused by the firewall. Turning this off closes the remaining slow exfiltration channel but breaks anything that resolves for itself - git, package managers, most clients. See the README. | boolean | true |
-| dnsServers | IPv4 addresses or CIDRs that port 53 may be opened to, comma separated. Empty means the nameservers the container runtime put in /etc/resolv.conf, which is what would have been used anyway. Only consulted when allowDns is on. | string | - |
-| proxyPort | Loopback port the filtering proxy listens on. | string | 3128 |
-
 ## Host setup
 
 This feature bind-mounts `~/.config/egress-filter` from the host, read-only. A bind mount whose
@@ -194,8 +168,3 @@ This is correct for a default-deny posture, and surprising the first time.
 **`NET_ADMIN` is unconditional**, because `capAdd` is static metadata like everything else here.
 That is why this is a separate feature rather than an option on `sandbox`. Only projects that ask for
 egress filtering get the capability.
-
-
----
-
-_Note: This file was auto-generated from the [devcontainer-feature.json](devcontainer-feature.json).  Add additional notes to a `NOTES.md`._

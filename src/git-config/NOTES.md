@@ -1,22 +1,3 @@
-
-# Git config (nshafer) (git-config)
-
-Copies the host's git configuration and excludes file into the container, from git's XDG config directory, in every container - including the ones the CLI creates, which copy nothing.
-
-## Example Usage
-
-```json
-"features": {
-    "ghcr.io/nshafer/devcontainer-features/git-config:1": {}
-}
-```
-
-## Options
-
-| Options Id | Description | Type | Default Value |
-|-----|-----|-----|-----|
-
-
 ## Host setup
 
 This feature bind-mounts `~/.config/git` from the host, read-only. A bind mount whose source does
@@ -83,8 +64,3 @@ One thing VS Code does that this feature does not: it also copies the file named
 `gpg.ssh.allowedSignersFile`. That file can live anywhere on the host, and a feature can mount fixed
 paths only. Keep `core.excludesfile` in mind for the same reason. Point it outside `~/.config/git`
 and the container does not have the file.
-
-
----
-
-_Note: This file was auto-generated from the [devcontainer-feature.json](devcontainer-feature.json).  Add additional notes to a `NOTES.md`._

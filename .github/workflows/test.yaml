@@ -46,13 +46,12 @@ jobs:
       - name: Install the devcontainer CLI
         run: npm install -g @devcontainers/cli
 
-      # The claude feature bind-mounts ~/.claude/settings.json, and a bind mount whose source is
+      # git-config and egress-filter bind-mount host paths, and a bind mount whose source is
       # missing stops the container from starting outright — Docker does not create it. A runner
-      # has neither the directory nor the file.
+      # has neither directory. (claude mounts nothing; it seeds settings from its option.)
       - name: Create host config paths
         run: |
-          mkdir -p ~/.claude ~/.config/git ~/.config/egress-filter
-          printf '{"theme":"dark","model":"opus"}\n' > ~/.claude/settings.json
+          mkdir -p ~/.config/git ~/.config/egress-filter
           git config -f ~/.config/git/config user.name "CI"
           printf 'ci-canary-pattern\n' > ~/.config/git/ignore
           # The global egress allowlist. Left almost empty on purpose: the tests allow what they
