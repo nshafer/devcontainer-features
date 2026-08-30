@@ -15,7 +15,7 @@ Default-deny outbound networking, with a hostname allowlist merged from a global
 
 | Options Id | Description | Type | Default Value |
 |-----|-----|-----|-----|
-| presets | Curated blocks of hostnames for common ecosystems, comma separated. Available: debian, ubuntu, alpine, npm, hex, go, python, rust, github, gitlab, docker, claude. Saves maintaining forty hostnames by hand; an unknown name is a warning, not a silent no-op. | string | - |
+| presets | Curated blocks of hostnames for common ecosystems, comma separated. Available: debian, ubuntu, alpine, npm, hex, go, python, rust, github, githubcopilot, gitlab, docker, claude. Saves maintaining forty hostnames by hand; an unknown name is a warning, not a silent no-op. | string | - |
 | allow | Extra hostnames to allow, comma separated, on top of the lists. A leading dot means the domain and its subdomains: '.github.com,pypi.org'. | string | - |
 | deny | Hostnames to remove from the merged allowlist, comma separated. Applied last, so it overrides the global, project and baseline lists. | string | - |
 | baseline | Include the built-in baseline that keeps VS Code itself working - the marketplace, extension CDNs and update hosts. Without it the server cannot install extensions, and attaching may hang. | boolean | true |
@@ -79,12 +79,11 @@ already looks like a regex passes through.
 }
 ```
 
-Available: `debian`, `ubuntu`, `alpine`, `npm`, `hex`, `go`, `python`, `rust`, `github`, `gitlab`,
-`docker`, `claude`. Each one is a small commented file under `src/egress-filter/presets/`. The
-comments say which entries the author verified against a real image or client and which the author
-did not. The apt mirrors, npm registry, Go proxy and Hex repo come from the running tools. The rest
-are first guesses. An unknown name is a **warning that lists the valid ones**, never a silent
-no-op.
+Available: `debian`, `ubuntu`, `alpine`, `npm`, `hex`, `go`, `python`, `rust`, `github`, `githubcopilot`, `gitlab`,
+`docker`, `claude`. Each one is a small commented file under `src/egress-filter/presets/`. The comments say which
+entries the author verified against a real image or client and which the author did not. The apt mirrors, npm registry,
+Go proxy and Hex repo come from the running tools. The rest are first guesses. An unknown name is a **warning that lists
+the valid ones**, never a silent no-op.
 
 Two presets are easy to get wrong, and the feature handles both. `go` needs the *source* hosts as
 well as the proxy, because `GOPROXY` ends in `,direct`. `docker` needs three hosts, since a missing
