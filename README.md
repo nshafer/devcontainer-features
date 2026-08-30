@@ -223,9 +223,14 @@ Everything else works the same, the git warning included, which then names `*.gp
 passed your own `--config`, or the subcommand takes no `--config` at all. So `devc features test`
 and `devc --version` behave as before, and a repo with no override file needs no second alias.
 
-Three more notes:
+Four more notes:
 
-- `devc merged` writes the config, prints it, and runs nothing. Use it to read the result.
+- `devc merge` writes the generated config and reports what it did. It starts no container, and
+  it needs no devcontainer CLI at all. VS Code watches the generated file, so a change makes it
+  ask to rebuild. Where the content matches, `devc` leaves the file alone and prints
+  `No changes detected`, so no rebuild prompt appears for nothing.
+- `devc merged` prints the merge result to stdout and writes nothing. It creates no `local/`
+  directory, and it leaves an existing one alone, so `devc merged | jq .features` is safe.
 - VS Code looks one level down for `.devcontainer/*/devcontainer.json`, so "Reopen in Container"
   finds the generated config and offers a picker. `devc open` names it without the prompt.
 - The lock file follows the config, so `devc upgrade` pins the feature digests in the gitignored

@@ -7,6 +7,10 @@ writes the result to `.devcontainer/local/devcontainer.json`, and adds
 
 With no override file present, it runs the real CLI unchanged.
 
+Two subcommands belong to devc, and neither one starts the real CLI:
+  merge   writes the generated config, and reports what it did.
+  merged  prints the generated config, and writes nothing.
+
 `--local-config NAME` uses `devcontainer.NAME.json` and the directory `.devcontainer/NAME/`
 instead. The default name is `local`. The flag belongs to devc, and the real CLI never sees it.
 
@@ -52,8 +56,8 @@ CONFIG_SUBCOMMANDS = {
 }
 
 # Every other subcommand, so that a flag written before the subcommand cannot be
-# mistaken for one. `merge` belongs to devc and never reaches the real CLI.
-OTHER_SUBCOMMANDS = {"features", "templates", "merged"}
+# mistaken for one. `merge` and `merged` belong to devc and never reach the real CLI.
+OTHER_SUBCOMMANDS = {"features", "templates", "merge", "merged"}
 
 # Flags that take a value, and that someone may write before the subcommand.
 VALUE_FLAGS = {"--workspace-folder", "--config", "--override-config", "--log-level", "--log-format"}
@@ -271,11 +275,16 @@ def find_configs(workspace: str, name: str) -> "tuple[str | None, str | None]":
     return None, None
 
 
-def write_if_changed(path: str, content: str) -> None:
+def write_if_changed(path: str, content: str) -> bool:
+    """Write the file only where the content differs. Return True after a write.
+
+    The skipped write matters: VS Code watches the generated config, and a rewrite
+    with the same bytes still asks to rebuild the container.
+    """
     try:
         with open(path, encoding="utf-8") as handle:
             if handle.read() == content:
-                return
+                return False
     except OSError:
         pass
     try:
@@ -283,10 +292,12 @@ def write_if_changed(path: str, content: str) -> None:
             handle.write(content)
     except OSError as error:
         die(f"cannot write {path}: {error.strerror}")
+    return True
 
 
-def generate(workspace: str, base_path: "str | None", override_path: str,
-             name: str) -> "tuple[str, str]":
+def build_config(workspace: str, base_path: "str | None", override_path: str,
+                 name: str) -> "tuple[str, str, str]":
+    """Return (output path, merged JSON, whole file content). This writes nothing."""
     out_dir = os.path.join(workspace, ".devcontainer", name)
     out_path = os.path.join(out_dir, OUTPUT_NAME)
 
@@ -304,6 +315,15 @@ def generate(workspace: str, base_path: "str | None", override_path: str,
         f"// Source: {' + '.join(sources)}\n"
     )
 
+    return out_path, merged_json, header + merged_json + "\n"
+
+
+def generate(workspace: str, base_path: "str | None", override_path: str,
+             name: str) -> "tuple[str, bool]":
+    """Write the generated config. Return (output path, True after a write)."""
+    out_path, _, content = build_config(workspace, base_path, override_path, name)
+    out_dir = os.path.dirname(out_path)
+
     try:
         os.makedirs(out_dir, exist_ok=True)
     except OSError as error:
@@ -311,8 +331,7 @@ def generate(workspace: str, base_path: "str | None", override_path: str,
 
     # Keep the generated directory out of the repository on its own.
     write_if_changed(os.path.join(out_dir, ".gitignore"), "*\n")
-    write_if_changed(out_path, header + merged_json + "\n")
-    return out_path, merged_json
+    return out_path, write_if_changed(out_path, content)
 
 
 def warn_if_committable(workspace: str, override_path: str, name: str) -> None:
@@ -426,11 +445,28 @@ def main(argv: "list[str]") -> None:
     subcommand = args[index] if index is not None else None
     base_path, override_path = find_configs(workspace, name)
 
-    if subcommand == "merged":
+    # `merge` and `merged` belong to devc. Neither one starts the real CLI.
+    if subcommand in ("merge", "merged"):
         if not override_path:
             die(f"no .devcontainer/devcontainer.{name}.json in {workspace}")
-        _, config = generate(workspace, base_path, override_path, name)
-        print(config)
+        warn_if_committable(workspace, override_path, name)
+
+        if subcommand == "merged":
+            # Read only, so the output pipes into jq and leaves the file alone.
+            _, merged_json, _ = build_config(workspace, base_path, override_path, name)
+            print(merged_json)
+            return
+
+        config_path, changed = generate(workspace, base_path, override_path, name)
+        if changed:
+            shown = os.path.relpath(config_path, workspace)
+            source = os.path.relpath(override_path, workspace)
+            print(
+                f"{MAGENTA}{PROG}{RESET}: Wrote {BOLD}{CYAN}{shown}{RESET}"
+                f" from {CYAN}{source}{RESET}"
+            )
+        else:
+            print(f"{MAGENTA}{PROG}{RESET}: No changes detected")
         return
 
     cli = real_cli()
