@@ -1,6 +1,6 @@
 {
   "id": "tidewave",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "name": "Tidewave (nshafer)",
   "description": "Installs the Tidewave CLI at build time and starts it on every container start, so the Tidewave app on the host can drive the project inside the container.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/tidewave",

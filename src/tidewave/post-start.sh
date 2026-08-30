@@ -26,6 +26,10 @@ CONFIG=/usr/local/share/devcontainer/tidewave/config
 [ -r "$CONFIG" ] && . "$CONFIG"
 
 LOG="${TIDEWAVE_LOG:-/tmp/tidewave.log}"
+# Home-relative, so it is read here and not baked into the config: a feature's build stage cannot
+# be sure of the remote user, and this script runs as that user with $HOME already correct.
+# TIDEWAVE_TMP_DIR is an override for the test suite, like TIDEWAVE_LOG above. Nothing sets either.
+TMP_DIR="${TIDEWAVE_TMP_DIR:-${HOME:-}/.cache/tidewave/tmp}"
 
 if [ "$AUTOSTART" != "true" ]; then
     echo "==> tidewave: autostart is off; run 'tidewave $ARGS' yourself"
@@ -60,6 +64,21 @@ if [ -z "${TIDEWAVE_HOST_PATH:-}" ]; then
     echo '      "remoteEnv": { "TIDEWAVE_HOST_PATH": "${localEnv:TIDEWAVE_HOST_PATH}" }'
 fi
 
+# Temp files go under the home directory rather than /tmp, which puts them beside the Bun runtime
+# the CLI downloads to ~/.cache/tidewave and inside whatever the persist-homedir feature is keeping.
+# With that feature the pair survives a rebuild. Without it neither does, which is where they
+# started. TMPDIR is the only way to say so: the CLI takes no flag for a temp directory, and the
+# setting has to reach the processes it spawns as well, which inherit the environment and nothing
+# else.
+#
+# Probed rather than assumed. An unwritable directory would make every temp write fail, and a start
+# that would have worked on the default temp directory is not worth losing to that.
+if mkdir -p "$TMP_DIR" 2>/dev/null && [ -w "$TMP_DIR" ]; then
+    export TMPDIR="$TMP_DIR"
+else
+    echo "!!! tidewave: $TMP_DIR is not writable by $(whoami); leaving TMPDIR alone" >&2
+fi
+
 echo "==> tidewave: starting in $PWD, logging to $LOG"
 # The CLI is silent unless it fails, so the log is empty on a healthy run -- stamp it, or an empty
 # file reads like the process never started. Truncated per start: the container's previous run is
@@ -67,6 +86,7 @@ echo "==> tidewave: starting in $PWD, logging to $LOG"
 {
     echo "=== tidewave $ARGS"
     echo "=== started $(date -Is) in $PWD by $(whoami)"
+    echo "=== tmpdir ${TMPDIR:-<default>}"
 } > "$LOG"
 
 # setsid puts it in its own session so it is not a child of the lifecycle shell the CLI is waiting

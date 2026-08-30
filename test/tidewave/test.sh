@@ -62,11 +62,39 @@ check "a second run leaves the running instance alone" bash -c '
 check "the log says what was started" bash -c '
     grep -q "allow-remote-access" /tmp/tidewave.log'
 
+# Temp files are put beside the Bun runtime under ~/.cache/tidewave, so persist-homedir keeps both
+# or keeps neither. The CLI takes no flag for a temp directory, which is why this is TMPDIR.
+check "the temp dir was created under the home directory" bash -c '
+    ls -ldn "$HOME/.cache/tidewave/tmp"
+    [ -w "$HOME/.cache/tidewave/tmp" ]'
+
+check "the log records the temp dir it chose" bash -c '
+    grep -q "^=== tmpdir $HOME/.cache/tidewave/tmp$" /tmp/tidewave.log'
+
+# The CLI takes no flag for a temp directory, so TMPDIR is the whole mechanism. Reading it back out
+# of the running process is the only proof that the export reached the daemon: post-start hands it
+# over through the environment, and setsid detaches the process from the shell that set it.
+check "TMPDIR reached the running process" bash -c '
+    pid=$(pgrep -x tidewave | head -1)
+    tr "\0" "\n" < /proc/$pid/environ | grep TMPDIR | tee /dev/stderr | grep -qx "TMPDIR=$HOME/.cache/tidewave/tmp"'
+
 # The feature cannot set this itself -- containerEnv is a Dockerfile ENV and ${localEnv:...} is not
 # substituted there -- so the least it can do is tell you when the project has not passed it in.
 check "an unset TIDEWAVE_HOST_PATH is called out" bash -c '
     pkill -x tidewave; sleep 1
     env -u TIDEWAVE_HOST_PATH TIDEWAVE_LOG=/tmp/tidewave-hostpath.log \
         /usr/local/share/devcontainer/tidewave/post-start.sh | grep -q "TIDEWAVE_HOST_PATH is not set"'
+
+# The fallback. An unwritable temp directory is a cost, and losing the bridge over it would be a
+# fault, so the start goes ahead on the default temp directory instead. /proc stands in for the
+# unwritable directory: it exists, so mkdir -p succeeds, and the remote user cannot write to it.
+check "an unwritable temp dir warns but still starts the CLI" bash -c '
+    pkill -x tidewave; sleep 1
+    out=$(TIDEWAVE_TMP_DIR=/proc TIDEWAVE_LOG=/tmp/tidewave-fallback.log \
+        /usr/local/share/devcontainer/tidewave/post-start.sh 2>&1)
+    echo "$out"
+    echo "$out" | grep -q "/proc is not writable"
+    echo "$out" | grep -q "listening on 9000"
+    grep -q "^=== tmpdir <default>$" /tmp/tidewave-fallback.log'
 
 reportResults

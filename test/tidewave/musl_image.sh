@@ -14,4 +14,9 @@ check "the musl asset was chosen" bash -c '
     /usr/local/share/devcontainer/tidewave/post-start.sh >/dev/null
     curl -sf --max-time 5 -X POST http://127.0.0.1:9000/about | tee /dev/stderr | grep -q "unknown-linux-musl"'
 
+# The home directory differs per image, so check the path really followed it here too.
+check "the temp dir followed the home directory" bash -c '
+    ls -ldn "$HOME/.cache/tidewave/tmp"
+    [ -w "$HOME/.cache/tidewave/tmp" ]'
+
 reportResults

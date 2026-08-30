@@ -87,6 +87,25 @@ Switching an existing container between the two is self-healing, because the two
 different filenames. The feature leaves the stale one in the cache and downloads a correct one beside
 it. It is only wasted bytes, but it does survive a rebuild when `persist-homedir` is in play.
 
+**Temp files go under the home directory, not `/tmp`.** The `postStart` script exports `TMPDIR` as
+`$HOME/.cache/tidewave/tmp`. The CLI takes no flag for a temp directory, so the environment variable
+is the whole mechanism, and it reaches the processes the CLI spawns as well.
+
+The placement is the point. `~/.cache/tidewave` is already where the CLI keeps the Bun runtime it
+downloads, and the `persist-homedir` feature puts the whole of `/home` on a volume. Add that feature
+and the pair survives a rebuild. Leave it out and neither does, which is where a container without
+any of this starts. Nothing here mounts anything, so a project pays nothing for the arrangement.
+
+The script probes the directory rather than trusting it. If the directory cannot be made, or cannot
+be written, the script says so and leaves `TMPDIR` alone. A lost cache is a cost. A bridge that never
+came up is a fault. The temp directory it settled on is stamped into `/tmp/tidewave.log` beside the
+command, so the log says which one a run actually used.
+
+**`TMPDIR` does not move the Bun download.** The string does not appear in the CLI binary at all. The
+CLI reports its own `cache_dir` from `POST /about`, and it is `$XDG_CACHE_HOME/tidewave`, or
+`~/.cache/tidewave` when that variable is unset. Putting the temp directory beside it is a placement
+and not a redirection.
+
 The feature uses `postStart` rather than `postCreate`, because the process dies with the container
 and has to come back with it. It runs on every start, so it first probes `POST /about` and leaves an
 instance that already answers alone.

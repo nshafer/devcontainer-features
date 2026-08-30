@@ -10,4 +10,9 @@ check "post-start starts nothing and says why" bash -c '
     echo "$out" | grep -q "autostart is off"
     ! pgrep -x tidewave'
 
+# autostart off returns before anything else happens, so nothing is left behind either -- the temp
+# directory belongs to a CLI that was never started.
+check "no temp dir is created when nothing starts" bash -c '
+    ! [ -e "$HOME/.cache/tidewave/tmp" ]'
+
 reportResults
