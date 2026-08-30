@@ -101,38 +101,62 @@ every machine to the same feature build, and run `devcontainer upgrade` to move 
 A committed `devcontainer.json` describes the project, and your agent setup is not the project.
 Nobody else on the repo asked to have their `sudo` removed. The VS Code user setting below solves
 that for containers VS Code starts, but the CLI ignores it, so a `devcontainer up` container gets a
-bare project again. The fix is two configs: the committed one, and a gitignored copy beside it that
-adds these features.
+bare project again.
+
+The spec has no inheritance between configs. The CLI reads exactly one file, and `--config` names
+it. So [`bin/devc`](bin/devc) does the inheritance instead: it merges a gitignored override file
+over the committed config, writes the result, and passes `--config` for you.
 
 ```
 .devcontainer/
-├── devcontainer.json          # committed — the project, no personal features
+├── devcontainer.json          # committed -- the project, no personal features
 ├── devcontainer-lock.json     # committed
 ├── Dockerfile                 # committed, shared by both configs
-└── local/                     # gitignored
-    ├── devcontainer.json      # yours — the same thing plus these features
+├── devcontainer.local.json    # gitignored -- your changes, and nothing else
+└── local/                     # generated, ignores itself
+    ├── devcontainer.json      # the merge of the two files above
     └── devcontainer-lock.json
 ```
 
-The repo's `.gitignore`:
+### Install it
 
-```gitignore
-# Per-developer local files.
-local/
-*.local
-*.local.*
+`devc` wraps the CLI the "Dev Containers: Install devcontainer CLI" command puts on `PATH`. Put
+`devc` on `PATH` beside it:
+
+```bash
+ln -s ~/src/devcontainer-features/bin/devc ~/bin/devc
 ```
 
-`local/devcontainer.json` is the committed config with the features added:
+It finds the real CLI as `devcontainer` on `PATH`, then `~/bin/devcontainer`. Set
+`DEVCONTAINER_CLI` to name a different one. Then drop the `--config` out of your aliases, because
+`devc` adds it:
+
+```bash
+alias dco="devc open"
+alias dcu="devc up"
+alias dce="devc exec"
+alias dcb="devc exec bash"
+```
+
+Add the override file to the repo's `.gitignore`, or to your global one:
+
+```gitignore
+*.local.json
+```
+
+`devc` warns on every run while that file is still committable. The generated `local/` directory
+needs no entry, because `devc` writes a `.gitignore` of `*` inside it.
+
+### Write the override file
+
+`.devcontainer/devcontainer.local.json` holds only what you change. Comments and trailing commas
+are allowed, as in any `devcontainer.json`:
 
 ```jsonc
 {
-  "name": "my-project",
-  "build": {
-    "dockerfile": "../Dockerfile",
-    "context": ".."
-  },
+  // A different user, because common-utils below creates it.
   "remoteUser": "devc",
+
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2": { "username": "devc" },
     "ghcr.io/nshafer/devcontainer-features/sandbox:1": {},
@@ -140,57 +164,58 @@ local/
     "ghcr.io/nshafer/devcontainer-features/git-config:1": {},
     "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {}
   },
-  "postCreateCommand": "go mod download"
+
+  "customizations": {
+    "vscode": { "extensions+": ["anthropic.claude-code"] }
+  }
 }
 ```
 
-**Two paths have to climb a directory.** Paths in a `devcontainer.json` are relative to that file,
-not to `.devcontainer/`, so a config one level deeper needs `"dockerfile": "../Dockerfile"` — and an
-explicit `"context": ".."`, because the build context defaults to the directory that holds the
-config. Leave the context out and the build runs inside `local/`, where the Dockerfile can `COPY`
-nothing from the repo.
+The merge follows five rules:
 
-**It is a copy, not an overlay.** The spec has no inheritance between configs. The CLI reads exactly
-one, so you copy across by hand whatever the committed config gains later. That is the cost of the
-arrangement, and the reason to keep the difference in the `features` block.
+| Written in the override file | Result in the generated config |
+| --- | --- |
+| `"remoteUser": "devc"` | Replaces the base value. |
+| `"features": { ... }` | Two objects merge key by key, at every depth. |
+| `"extensions+": ["a.b"]` | Appends to the base list. A `+` suffix needs a list on both sides. |
+| `"extensions": ["a.b"]` | Replaces the base list. |
+| `"features": { "./src/sandbox": null }` | Removes the key. |
 
-The lock file follows the config it belongs to, so `local/devcontainer-lock.json` is gitignored with
-the rest, and pinning your feature digests never shows in the project's diff.
+Rows three and four are the pair to keep straight. `features` is an object, so a feature you add
+lands beside the project's features. A list is not an object, so `"extensions"` throws the base
+list away and `"extensions+"` keeps it.
 
-### Pointing things at it
+### What devc rewrites
 
-Nothing discovers that file on its own. Every command needs `--config`:
+Paths in a `devcontainer.json` are relative to that file. The generated config sits one directory
+deeper than the two files it comes from, so `devc` rewrites these to name the same place:
 
-```bash
-devcontainer open --config .devcontainer/local/devcontainer.json
-devcontainer up   --config .devcontainer/local/devcontainer.json
-devcontainer exec --config .devcontainer/local/devcontainer.json bash
-```
+- `build.dockerfile` and `build.context`
+- `dockerComposeFile`, and the older top-level `dockerFile` and `context`
+- every feature named by a path, such as `./src/sandbox`
 
-`--workspace-folder` defaults to the current directory, so run them from the repo root and there is
-nothing else to pass. (`devcontainer open` belongs to the CLI the Dev Containers extension installs
-with the "Dev Containers: Install devcontainer CLI" command and puts on `PATH`, not to the npm
-`@devcontainers/cli`.) VS Code finds the file too — it looks one level down for
-`.devcontainer/*/devcontainer.json` and offers a picker when there is more than one — but
-`open --config` names the one you want without the prompt.
+It also writes `build.context` out in full where the base config leaves it out. The context
+defaults to the directory of the config file, and that directory changes, so the default alone
+would build inside `local/` and `COPY` nothing from the repo.
 
-That is enough repetition to be worth aliasing. From `~/.bash_aliases`:
+One thing it does not rewrite: a relative `source=` in a `mounts` entry. Name those with
+`${localWorkspaceFolder}`.
 
-```bash
-alias devc="devcontainer"
-alias dco="devcontainer open"
-alias dcol="devcontainer open --config .devcontainer/local/devcontainer.json"
-alias dcu="devcontainer up"
-alias dcul="devcontainer up --config .devcontainer/local/devcontainer.json"
-alias dce="devcontainer exec"
-alias dcel="devcontainer exec --config .devcontainer/local/devcontainer.json"
-alias dcb="devcontainer exec bash"
-alias dcbl="devcontainer exec --config .devcontainer/local/devcontainer.json bash"
-```
+### What devc passes straight through
 
-The trailing `l` is "local", and the pairs are the point. `dcu`/`dcul` build the project as everyone
-else gets it or as you want it, `dcb`/`dcbl` open a shell in either, `dco`/`dcol` open one in VS
-Code. Being one letter apart keeps the local config from being the one you forget.
+`devc` runs the real CLI unchanged, with no merge, in three cases: no override file exists, you
+passed your own `--config`, or the subcommand takes no `--config` at all. So `devc features test`
+and `devc --version` behave as before, and a repo with no override file needs no second alias.
+
+Three more notes:
+
+- `devc merge` writes the config, prints its path, and runs nothing. Use it to read the result.
+- VS Code looks one level down for `.devcontainer/*/devcontainer.json`, so "Reopen in Container"
+  finds the generated config and offers a picker. `devc open` names it without the prompt.
+- The lock file follows the config, so `devc upgrade` pins the feature digests in the gitignored
+  `local/devcontainer-lock.json`. They never show in the project's diff. Run plain `devcontainer
+  upgrade` to move the committed lock file instead.
+
 
 ## Use them everywhere
 

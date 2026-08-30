@@ -1,0 +1,398 @@
+#!/usr/bin/env python3
+"""devc -- a devcontainer CLI wrapper that applies a per-developer override file.
+
+It merges `.devcontainer/devcontainer.local.json` over `.devcontainer/devcontainer.json`,
+writes the result to `.devcontainer/local/devcontainer.json`, and adds
+`--config .devcontainer/local/devcontainer.json` to the command it runs.
+
+With no override file present, it runs the real CLI unchanged.
+
+Merge rules, applied to the override file:
+  "key": value   replaces the base value. Two objects merge key by key instead.
+  "key+": [...]  appends to the base list.
+  "key": null    removes the key.
+
+Both config files sit in `.devcontainer/`, and the generated file sits one level
+deeper, so relative paths in either file are rewritten to point at the same place.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import posixpath
+import shutil
+import subprocess
+import sys
+
+PROG = "devc"
+
+# ANSI styles, empty when stdout is not a terminal or NO_COLOR is set.
+if sys.stdout.isatty() and not os.environ.get("NO_COLOR"):
+    DIM, BOLD, CYAN, MAGENTA, RESET = "\033[2m", "\033[1m", "\033[36m", "\033[35m", "\033[0m"
+else:
+    DIM = BOLD = CYAN = MAGENTA = RESET = ""
+
+# The devcontainer CLI subcommands that accept --config. `features` and `templates`
+# take their own flags, so they pass through untouched.
+CONFIG_SUBCOMMANDS = {
+    "build",
+    "exec",
+    "open",
+    "outdated",
+    "read-configuration",
+    "run-user-commands",
+    "set-up",
+    "up",
+    "upgrade",
+}
+
+# Every other subcommand, so that a flag written before the subcommand cannot be
+# mistaken for one. `merge` belongs to devc and never reaches the real CLI.
+OTHER_SUBCOMMANDS = {"features", "templates", "merged"}
+
+# Flags that take a value, and that someone may write before the subcommand.
+VALUE_FLAGS = {"--workspace-folder", "--config", "--override-config", "--log-level", "--log-format"}
+
+# Keys whose value is a path relative to the directory that holds the config file.
+TOP_LEVEL_PATH_KEYS = ("dockerComposeFile", "dockerFile", "context")
+BUILD_PATH_KEYS = ("dockerfile", "context")
+
+# Base config files, in the order the spec looks for them.
+BASE_NAMES = (os.path.join(".devcontainer", "devcontainer.json"), ".devcontainer.json")
+
+OUTPUT_DIR = os.path.join(".devcontainer", "local")
+OUTPUT_NAME = "devcontainer.json"
+
+
+def die(message: str):  # noqa: F821
+    print(f"{PROG}: {message}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def warn(message: str) -> None:
+    print(f"{PROG}: {message}", file=sys.stderr)
+
+
+# --------------------------------------------------------------------------- JSONC
+
+def _skip_string(text: str, i: int) -> int:
+    """Return the index just past the string literal that starts at `i`."""
+    j = i + 1
+    n = len(text)
+    while j < n:
+        if text[j] == "\\":
+            j += 2
+            continue
+        if text[j] == '"':
+            return j + 1
+        j += 1
+    return n
+
+
+def strip_comments(text: str) -> str:
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == '"':
+            j = _skip_string(text, i)
+            out.append(text[i:j])
+            i = j
+        elif c == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":
+                i += 1
+        elif c == "/" and i + 1 < n and text[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                i += 1
+            i += 2
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def strip_trailing_commas(text: str) -> str:
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == '"':
+            j = _skip_string(text, i)
+            out.append(text[i:j])
+            i = j
+            continue
+        if c == ",":
+            j = i + 1
+            while j < n and text[j] in " \t\r\n":
+                j += 1
+            if j < n and text[j] in "}]":
+                i += 1
+                continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def read_jsonc(path: str) -> dict:
+    """Read a devcontainer.json. Comments and trailing commas are allowed."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            raw = handle.read()
+    except OSError as error:
+        die(f"cannot read {path}: {error.strerror}")
+    if not raw.strip():
+        return {}
+    try:
+        value = json.loads(strip_trailing_commas(strip_comments(raw)))
+    except json.JSONDecodeError as error:
+        die(f"{path} is not valid JSON: line {error.lineno} column {error.colno}: {error.msg}")
+    if not isinstance(value, dict):
+        die(f"{path} must hold a JSON object at the top level")
+    return value
+
+
+# --------------------------------------------------------------------------- merge
+
+def merge(base: dict, override: dict, trail: str = "") -> dict:
+    result = dict(base)
+    for key, value in override.items():
+        where = f"{trail}.{key}" if trail else key
+
+        if key.endswith("+") and len(key) > 1:
+            target = key[:-1]
+            current = result.get(target)
+            if not isinstance(value, list):
+                die(f'"{where}" must hold a list, because the "+" suffix appends to a list')
+            if current is None:
+                result[target] = list(value)
+            elif isinstance(current, list):
+                result[target] = current + list(value)
+            else:
+                spot = f"{trail}.{target}" if trail else target
+                die(f'cannot append to "{spot}", because the base value is not a list')
+            continue
+
+        if value is None:
+            result.pop(key, None)
+            continue
+
+        current = result.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            result[key] = merge(current, value, where)
+        else:
+            result[key] = value
+    return result
+
+
+# --------------------------------------------------------------- relative paths
+
+def is_relative_path(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and value != ""
+        and not value.startswith(("/", "~", "$", "\\"))
+        and not (len(value) > 1 and value[1] == ":")  # a Windows drive letter
+    )
+
+
+def rebase(prefix: str, value: str) -> str:
+    """Move a path so that it names the same file from the generated config."""
+    return posixpath.normpath(posixpath.join(prefix, value))
+
+
+def rebase_feature(prefix: str, key: str) -> str:
+    """Move a local feature path. The CLI needs the "./" or "../" prefix to keep it."""
+    moved = rebase(prefix, key)
+    return moved if moved.startswith(("./", "../")) else "./" + moved
+
+
+def rebase_paths(config: dict, prefix: str) -> dict:
+    result = dict(config)
+
+    for key in TOP_LEVEL_PATH_KEYS:
+        value = result.get(key)
+        if is_relative_path(value):
+            result[key] = rebase(prefix, value)
+        elif isinstance(value, list):
+            result[key] = [rebase(prefix, v) if is_relative_path(v) else v for v in value]
+
+    build = result.get("build")
+    if isinstance(build, dict):
+        build = dict(build)
+        for key in BUILD_PATH_KEYS:
+            if is_relative_path(build.get(key)):
+                build[key] = rebase(prefix, build[key])
+        # The build context defaults to the directory of the config file, and the
+        # generated config sits in a different directory. Name the old default.
+        if "dockerfile" in build and "context" not in build:
+            build["context"] = prefix
+        result["build"] = build
+
+    # The same default, for the older top-level form.
+    if "dockerFile" in result and "context" not in result:
+        result["context"] = prefix
+
+    features = result.get("features")
+    if isinstance(features, dict):
+        result["features"] = {
+            (rebase_feature(prefix, key) if key.startswith(("./", "../")) else key): value
+            for key, value in features.items()
+        }
+
+    return result
+
+
+# ----------------------------------------------------------------------- files
+
+def find_configs(workspace: str) -> "tuple[str | None, str | None]":
+    """Return (base config path, override config path). Either may be None."""
+    for name in BASE_NAMES:
+        base = os.path.join(workspace, name)
+        if os.path.isfile(base):
+            override = base[: -len(".json")] + ".local.json"
+            return base, (override if os.path.isfile(override) else None)
+
+    # An override file with no base config still describes a whole container.
+    for name in BASE_NAMES:
+        override = os.path.join(workspace, name)[: -len(".json")] + ".local.json"
+        if os.path.isfile(override):
+            return None, override
+    return None, None
+
+
+def write_if_changed(path: str, content: str) -> None:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            if handle.read() == content:
+                return
+    except OSError:
+        pass
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(content)
+    except OSError as error:
+        die(f"cannot write {path}: {error.strerror}")
+
+
+def generate(workspace: str, base_path: "str | None", override_path: str) -> str:
+    out_dir = os.path.join(workspace, OUTPUT_DIR)
+    out_path = os.path.join(out_dir, OUTPUT_NAME)
+
+    source_dir = os.path.dirname(base_path or override_path)
+    prefix = os.path.relpath(source_dir, out_dir).replace(os.sep, "/")
+
+    base = read_jsonc(base_path) if base_path else {}
+    merged = rebase_paths(merge(base, read_jsonc(override_path)), prefix)
+    merged_json = json.dumps(merged, indent=2)
+
+    sources = [posixpath.join(prefix, os.path.basename(p))
+               for p in (base_path, override_path) if p]
+    header = (
+        f"// Generated by {PROG}. Every edit here is lost on the next run.\n"
+        f"// Source: {' + '.join(sources)}\n"
+    )
+
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+    except OSError as error:
+        die(f"cannot create {out_dir}: {error.strerror}")
+
+    # Keep the generated directory out of the repository on its own.
+    write_if_changed(os.path.join(out_dir, ".gitignore"), "*\n")
+    write_if_changed(out_path, header + merged_json + "\n")
+    return out_path, merged_json
+
+
+def warn_if_committable(workspace: str, override_path: str) -> None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", workspace, "check-ignore", "-q", override_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return
+    if result.returncode == 1:
+        name = os.path.relpath(override_path, workspace)
+        warn(f"{name} is not ignored by git. Add '*.local.json' to .gitignore.")
+
+
+# ------------------------------------------------------------------------ args
+
+def flag_value(args: "list[str]", name: str) -> "str | None":
+    for index, arg in enumerate(args):
+        if arg == name and index + 1 < len(args):
+            return args[index + 1]
+        if arg.startswith(name + "="):
+            return arg[len(name) + 1:]
+    return None
+
+
+def find_subcommand(args: "list[str]") -> "int | None":
+    known = CONFIG_SUBCOMMANDS | OTHER_SUBCOMMANDS
+    for index, arg in enumerate(args):
+        if arg not in known:
+            continue
+        if index > 0 and args[index - 1] in VALUE_FLAGS:
+            continue  # the value of a flag, not the subcommand
+        return index
+    return None
+
+
+def real_cli() -> str:
+    override = os.environ.get("DEVCONTAINER_CLI")
+    if override:
+        return override
+
+    self_path = os.path.realpath(__file__)
+    for candidate in (shutil.which("devcontainer"), os.path.expanduser("~/bin/devcontainer")):
+        if candidate and os.path.realpath(candidate) != self_path and os.access(candidate, os.X_OK):
+            return candidate
+    die("cannot find the devcontainer CLI on PATH. Set DEVCONTAINER_CLI to its path.")
+
+
+def run(command: "list[str]"):  # noqa: F821
+    try:
+        os.execv(command[0], command)
+    except OSError as error:
+        die(f"cannot run {command[0]}: {error.strerror}")
+
+
+def main(argv: "list[str]") -> None:
+    args = list(argv)
+    workspace = os.path.abspath(flag_value(args, "--workspace-folder") or ".")
+    index = find_subcommand(args)
+    subcommand = args[index] if index is not None else None
+    base_path, override_path = find_configs(workspace)
+
+    if subcommand == "merged":
+        if not override_path:
+            die("no .devcontainer/devcontainer.local.json in " + workspace)
+        config_path, config = generate(workspace, base_path, override_path)
+        print(config)
+        return
+
+    cli = real_cli()
+
+    if subcommand not in CONFIG_SUBCOMMANDS or flag_value(args, "--config") is not None:
+        run([cli] + args)
+
+    base_path, override_path = find_configs(workspace)
+    if not override_path:
+        run([cli] + args)
+
+    warn_if_committable(workspace, override_path)
+    config_path, config = generate(workspace, base_path, override_path)
+    name = os.path.relpath(override_path, workspace)
+    print(
+        f"{MAGENTA}{PROG}{RESET}: Running {BOLD}{CYAN}{subcommand}{RESET}"
+        f" with override from {CYAN}{name}{RESET}",
+        flush=True,
+    )
+    run([cli] + args[: index + 1] + ["--config", config_path] + args[index + 1:])
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
