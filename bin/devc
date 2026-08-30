@@ -7,6 +7,9 @@ writes the result to `.devcontainer/local/devcontainer.json`, and adds
 
 With no override file present, it runs the real CLI unchanged.
 
+`--local-config NAME` uses `devcontainer.NAME.json` and the directory `.devcontainer/NAME/`
+instead. The default name is `local`. The flag belongs to devc, and the real CLI never sees it.
+
 Merge rules, applied to the override file:
   "key": value   replaces the base value. Two objects merge key by key instead.
   "key+": [...]  appends to the base list.
@@ -21,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import posixpath
+import shlex
 import shutil
 import subprocess
 import sys
@@ -61,7 +65,8 @@ BUILD_PATH_KEYS = ("dockerfile", "context")
 # Base config files, in the order the spec looks for them.
 BASE_NAMES = (os.path.join(".devcontainer", "devcontainer.json"), ".devcontainer.json")
 
-OUTPUT_DIR = os.path.join(".devcontainer", "local")
+# The override file is devcontainer.NAME.json, and the generated config goes in .devcontainer/NAME/.
+DEFAULT_NAME = "local"
 OUTPUT_NAME = "devcontainer.json"
 
 
@@ -246,17 +251,21 @@ def rebase_paths(config: dict, prefix: str) -> dict:
 
 # ----------------------------------------------------------------------- files
 
-def find_configs(workspace: str) -> "tuple[str | None, str | None]":
+def override_path_for(base_path: str, name: str) -> str:
+    return base_path[: -len(".json")] + f".{name}.json"
+
+
+def find_configs(workspace: str, name: str) -> "tuple[str | None, str | None]":
     """Return (base config path, override config path). Either may be None."""
-    for name in BASE_NAMES:
-        base = os.path.join(workspace, name)
+    for candidate in BASE_NAMES:
+        base = os.path.join(workspace, candidate)
         if os.path.isfile(base):
-            override = base[: -len(".json")] + ".local.json"
+            override = override_path_for(base, name)
             return base, (override if os.path.isfile(override) else None)
 
     # An override file with no base config still describes a whole container.
-    for name in BASE_NAMES:
-        override = os.path.join(workspace, name)[: -len(".json")] + ".local.json"
+    for candidate in BASE_NAMES:
+        override = override_path_for(os.path.join(workspace, candidate), name)
         if os.path.isfile(override):
             return None, override
     return None, None
@@ -276,8 +285,9 @@ def write_if_changed(path: str, content: str) -> None:
         die(f"cannot write {path}: {error.strerror}")
 
 
-def generate(workspace: str, base_path: "str | None", override_path: str) -> str:
-    out_dir = os.path.join(workspace, OUTPUT_DIR)
+def generate(workspace: str, base_path: "str | None", override_path: str,
+             name: str) -> "tuple[str, str]":
+    out_dir = os.path.join(workspace, ".devcontainer", name)
     out_path = os.path.join(out_dir, OUTPUT_NAME)
 
     source_dir = os.path.dirname(base_path or override_path)
@@ -305,7 +315,7 @@ def generate(workspace: str, base_path: "str | None", override_path: str) -> str
     return out_path, merged_json
 
 
-def warn_if_committable(workspace: str, override_path: str) -> None:
+def warn_if_committable(workspace: str, override_path: str, name: str) -> None:
     try:
         result = subprocess.run(
             ["git", "-C", workspace, "check-ignore", "-q", override_path],
@@ -315,11 +325,41 @@ def warn_if_committable(workspace: str, override_path: str) -> None:
     except OSError:
         return
     if result.returncode == 1:
-        name = os.path.relpath(override_path, workspace)
-        warn(f"{name} is not ignored by git. Add '*.local.json' to .gitignore.")
+        shown = os.path.relpath(override_path, workspace)
+        warn(f"{shown} is not ignored by git. Add '*.{name}.json' to .gitignore.")
 
 
 # ------------------------------------------------------------------------ args
+
+def take_flag(args: "list[str]", flag: str) -> "str | None":
+    """Remove a devc flag and its value from `args`. Return the value, or None."""
+    value = None
+    kept = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == flag:
+            if index + 1 >= len(args):
+                die(f"{flag} needs a name, such as 'local'")
+            value = args[index + 1]
+            index += 2
+            continue
+        if arg.startswith(flag + "="):
+            value = arg[len(flag) + 1:]
+            index += 1
+            continue
+        kept.append(arg)
+        index += 1
+    args[:] = kept
+    return value
+
+
+def check_name(name: str) -> str:
+    """A name goes into two file paths, so it has to stay a single path segment."""
+    if not name or name in (".", "..") or name.startswith(".") or "/" in name or "\\" in name:
+        die(f"--local-config '{name}' is not a plain name. Use something like 'local' or 'gpu'.")
+    return name
+
 
 def flag_value(args: "list[str]", name: str) -> "str | None":
     for index, arg in enumerate(args):
@@ -341,57 +381,75 @@ def find_subcommand(args: "list[str]") -> "int | None":
     return None
 
 
-def real_cli() -> str:
+def real_cli() -> "list[str]":
+    """Return the command that starts the real CLI, as a list of arguments."""
     override = os.environ.get("DEVCONTAINER_CLI")
     if override:
-        return override
+        # A path wins as it stands, so a directory name with a space still works.
+        # Anything else is a command line, such as "npx @devcontainers/cli".
+        return [override] if os.path.exists(override) else shlex.split(override)
 
     self_path = os.path.realpath(__file__)
     for candidate in (shutil.which("devcontainer"), os.path.expanduser("~/bin/devcontainer")):
         if candidate and os.path.realpath(candidate) != self_path and os.access(candidate, os.X_OK):
-            return candidate
-    die("cannot find the devcontainer CLI on PATH. Set DEVCONTAINER_CLI to its path.")
+            return [candidate]
+
+    # Last resort. npx asks before it downloads the package, and the npm build has no
+    # `open` subcommand. `open` belongs to the CLI that VS Code installs.
+    npx = shutil.which("npx")
+    if npx:
+        warn("no devcontainer CLI on PATH. Using npx @devcontainers/cli, which has no `open`.")
+        return [npx, "@devcontainers/cli"]
+
+    die(
+        "cannot find the devcontainer CLI. Install it with the VS Code command "
+        "\"Dev Containers: Install devcontainer CLI\", or set DEVCONTAINER_CLI."
+    )
 
 
 def run(command: "list[str]"):  # noqa: F821
+    # execvp and not execv, so that a bare name such as "npx" resolves on PATH.
     try:
-        os.execv(command[0], command)
+        os.execvp(command[0], command)
     except OSError as error:
         die(f"cannot run {command[0]}: {error.strerror}")
 
 
 def main(argv: "list[str]") -> None:
     args = list(argv)
+    # --local-config belongs to devc. Take it out before the real CLI sees it.
+    chosen = take_flag(args, "--local-config")
+    name = check_name(DEFAULT_NAME if chosen is None else chosen)
+
     workspace = os.path.abspath(flag_value(args, "--workspace-folder") or ".")
     index = find_subcommand(args)
     subcommand = args[index] if index is not None else None
-    base_path, override_path = find_configs(workspace)
+    base_path, override_path = find_configs(workspace, name)
 
     if subcommand == "merged":
         if not override_path:
-            die("no .devcontainer/devcontainer.local.json in " + workspace)
-        config_path, config = generate(workspace, base_path, override_path)
+            die(f"no .devcontainer/devcontainer.{name}.json in {workspace}")
+        _, config = generate(workspace, base_path, override_path, name)
         print(config)
         return
 
     cli = real_cli()
 
     if subcommand not in CONFIG_SUBCOMMANDS or flag_value(args, "--config") is not None:
-        run([cli] + args)
+        run(cli + args)
 
-    base_path, override_path = find_configs(workspace)
     if not override_path:
-        run([cli] + args)
+        run(cli + args)
 
-    warn_if_committable(workspace, override_path)
-    config_path, config = generate(workspace, base_path, override_path)
-    name = os.path.relpath(override_path, workspace)
+    warn_if_committable(workspace, override_path, name)
+    config_path, _ = generate(workspace, base_path, override_path, name)
+    shown = os.path.relpath(override_path, workspace)
     print(
         f"{MAGENTA}{PROG}{RESET}: Running {BOLD}{CYAN}{subcommand}{RESET}"
-        f" with override from {CYAN}{name}{RESET}",
+        f" with override from {CYAN}{shown}{RESET}",
         flush=True,
     )
-    run([cli] + args[: index + 1] + ["--config", config_path] + args[index + 1:])
+    run(cli + args[: index + 1] + ["--config", config_path] + args[index + 1:])
 
 
 if __name__ == "__main__":

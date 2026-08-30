@@ -124,19 +124,22 @@ over the committed config, writes the result, and passes `--config` for you.
 `devc` on `PATH` beside it:
 
 ```bash
+mkdir -p ~/bin
+curl -fsSL -o ~/bin/devc https://raw.githubusercontent.com/nshafer/devcontainer-features/main/bin/devc
+chmod +x ~/bin/devc
+```
+
+It is one file, and it needs python3 and nothing else. Run those three lines again for a new
+version. If you cloned this repo, a symlink follows every `git pull` instead:
+
+```bash
 ln -s ~/src/devcontainer-features/bin/devc ~/bin/devc
 ```
 
-It finds the real CLI as `devcontainer` on `PATH`, then `~/bin/devcontainer`. Set
-`DEVCONTAINER_CLI` to name a different one. Then drop the `--config` out of your aliases, because
-`devc` adds it:
-
-```bash
-alias dco="devc open"
-alias dcu="devc up"
-alias dce="devc exec"
-alias dcb="devc exec bash"
-```
+`devc` looks for the real CLI in three places, in order: `devcontainer` on `PATH`, then
+`~/bin/devcontainer`, then `npx @devcontainers/cli`. Set `DEVCONTAINER_CLI` to name a different
+one, as a path or as a whole command line. The npx fallback covers `up`, `build` and `exec`, but
+not `open`. The npm package carries no `open` subcommand, and `devc` says so before it runs.
 
 Add the override file to the repo's `.gitignore`, or to your global one:
 
@@ -201,6 +204,19 @@ would build inside `local/` and `COPY` nothing from the repo.
 One thing it does not rewrite: a relative `source=` in a `mounts` entry. Name those with
 `${localWorkspaceFolder}`.
 
+### Keep more than one override
+
+`--local-config NAME` swaps `local` for a name of your own. The flag belongs to `devc`, and the
+real CLI never sees it:
+
+```bash
+devc --local-config gpu up     # .devcontainer/devcontainer.gpu.json -> .devcontainer/gpu/
+devc --local-config ci build   # .devcontainer/devcontainer.ci.json  -> .devcontainer/ci/
+```
+
+The name has to stay a single directory name. A `/` in it, or a leading `.`, stops the run.
+Everything else works the same, the git warning included, which then names `*.gpu.json`.
+
 ### What devc passes straight through
 
 `devc` runs the real CLI unchanged, with no merge, in three cases: no override file exists, you
@@ -209,7 +225,7 @@ and `devc --version` behave as before, and a repo with no override file needs no
 
 Three more notes:
 
-- `devc merge` writes the config, prints its path, and runs nothing. Use it to read the result.
+- `devc merged` writes the config, prints it, and runs nothing. Use it to read the result.
 - VS Code looks one level down for `.devcontainer/*/devcontainer.json`, so "Reopen in Container"
   finds the generated config and offers a picker. `devc open` names it without the prompt.
 - The lock file follows the config, so `devc upgrade` pins the feature digests in the gitignored
