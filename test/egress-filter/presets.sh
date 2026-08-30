@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Presets and the denial log: the two things that make an allowlist maintainable rather than a
 # guessing game.
+#
+# Runs as root, to rebuild the allowlist with egress.sh. See the note at the top of strict.sh for
+# why sudo is not an option here.
 set -e
 source dev-container-features-test-lib
 
@@ -21,7 +24,7 @@ check "a preset that was not asked for is absent" bash -c '
 
 # An unknown preset must be loud. Silently ignoring it is the failure mode that costs an afternoon.
 check "an unknown preset warns and lists the real ones" bash -c '
-    out=$(sudo -n env EGRESS_PRESETS="debian,nosuchthing" \
+    out=$(env EGRESS_PRESETS="debian,nosuchthing" \
         /usr/local/share/devcontainer/egress-filter/egress.sh build 2>&1)
     echo "$out" | sed "s/^/  /"
     echo "$out" | grep -q "no such preset: nosuchthing" || { echo "no warning"; exit 1; }
@@ -32,7 +35,7 @@ check "an unknown preset warns and lists the real ones" bash -c '
 
 # Put the configured presets back, since the check above deliberately rebuilt with a different set.
 check "the configured presets are restored by a rebuild" bash -c '
-    sudo -n /usr/local/share/devcontainer/egress-filter/egress.sh reload >/dev/null 2>&1 \
+    /usr/local/share/devcontainer/egress-filter/egress.sh reload >/dev/null 2>&1 \
         || { echo "reload failed"; exit 1; }
     grep -q "golang" /etc/devcontainer/egress-filter/allow.regex || { echo "go preset did not come back"; exit 1; }
     echo "  presets restored"'
@@ -47,10 +50,14 @@ check "a preset host is actually reachable" bash -c '
 # silently, which is exactly the record you need.
 # ---------------------------------------------------------------------------------------------
 
-check "the proxy log is readable without root" bash -c '
+# The mode rather than a read as the remote user, because this scenario runs as root and root can
+# read the file whatever its mode says. What has to hold is that the *others* bit is set, since the
+# log is owned by the proxy uid and egress-denied is run by the person, not by root.
+check "the proxy log is world-readable, so egress-denied works without root" bash -c '
     f=/var/log/devcontainer/egress-filter-proxy.log
-    test -r "$f" || { echo "not readable by $(whoami)"; ls -l "$f"; exit 1; }
-    [ "$(stat -c %U "$f")" = egressfilter ] || { echo "owner: $(stat -c %U "$f")"; exit 1; }'
+    [ "$(stat -c %U "$f")" = egressfilter ] || { echo "owner: $(stat -c %U "$f")"; exit 1; }
+    mode=$(stat -c %a "$f"); echo "  mode $mode"
+    case "$mode" in *[4567]) ;; *) echo "not readable by others"; exit 1 ;; esac'
 
 check "egress-denied reports nothing before anything is refused" bash -c '
     egress-denied | tee /dev/stderr | grep -q "nothing has been refused"'

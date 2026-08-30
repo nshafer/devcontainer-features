@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 # Every option away from its default, which is the only way to know they are consulted at all.
+#
+# Runs as root, because one check reads the iptables chain and iptables answers nobody else. It
+# cannot get there with sudo: sudo is setuid, and a container that carries no_new_privs -- which
+# every container started by a dockerd inside a sandboxed dev container does -- refuses to run it.
+# Root is not exempt from the filter (only the proxy uid is), so every check below still means what
+# it says.
 set -e
 source dev-container-features-test-lib
 fetch() { timeout 15 curl -s -o /dev/null -w "%{http_code}" -x "http://127.0.0.1:8888" "https://$1" 2>/dev/null || echo 000; }
@@ -33,7 +39,7 @@ check "allowDns=false blocks the agent resolving for itself" bash -c '
     echo "  resolution refused, as configured"'
 
 check "allowDns=false leaves no accept on port 53 in the chain" bash -c '
-    sudo -n iptables -S DEVCONTAINER_EGRESS | grep -- "--dport 53" | grep -q ACCEPT \
+    iptables -S DEVCONTAINER_EGRESS | grep -- "--dport 53" | grep -q ACCEPT \
         && { echo "port 53 is accepted despite allowDns=false"; exit 1; }
     egress-status | tee /dev/stderr | grep -q "dns .*blocked (allowDns=false)"'
 

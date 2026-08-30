@@ -1,0 +1,3 @@
+# The feature sources are a symlink to ../src. They are copied into the image by the CLI from
+# its own context, not from this one, so keeping them out of the build context costs nothing.
+src

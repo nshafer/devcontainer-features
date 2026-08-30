@@ -181,6 +181,12 @@ safe only because the sudo drop is unconditional. A version with an optional sud
 this, because the flag breaks `sudo` for everyone. Note that `capDrop` has no equivalent at all,
 feature or otherwise.
 
+**The flag reaches inside a nested Docker daemon.** The kernel passes `no_new_privs` to every child
+process, and never clears it. So a `docker-in-docker` daemon in a sandboxed container inherits the
+flag, and hands it to every container it starts. `sudo` in those containers fails with *"the no new
+privileges flag is set"*, whatever their own `securityOpt` says. Give the process the root it needs
+by name — a `remoteUser` of `root`, or `docker run -u root` — rather than by a setuid binary.
+
 Finally, the feature is only as good as the container's user model. **It does nothing if
 `remoteUser` is root**, since root can `chmod` any tombstone back. `install.sh` says so loudly when
 it detects that.

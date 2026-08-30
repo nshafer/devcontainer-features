@@ -1,0 +1,72 @@
+{
+  "name": "devcontainer-features",
+  "build": { "dockerfile": "Dockerfile" },
+  "remoteUser": "node",
+  "features": {
+    // The features under development, by path rather than by registry reference. A path feature is
+    // built from the working tree, so "Rebuild Container" is how a change is tried -- the published
+    // ghcr.io/nshafer/devcontainer-features/* copies would test the last release instead.
+    //
+    // The cost of that is real: a feature broken badly enough to fail its install.sh breaks this
+    // container too. Recover with "Reopen Folder Locally", fix, rebuild.
+    "./src/persist-homedir": {},
+    "./src/git-config": {},
+    "./src/claude": {},
+    "./src/sandbox": {},
+    "./src/egress-filter": {
+      "presets": "debian,npm,github,docker,claude"
+    },
+
+    // `devcontainer features test` needs a Docker daemon, and it needs the daemon to see this
+    // container's filesystem: the harness applies each feature's mounts, and those name paths in
+    // the home directory of whoever runs the test. Docker-outside-of-docker would resolve them
+    // against the *host* home directory, where they hold someone else's files or nothing at all.
+    // An inner daemon resolves them here, which is what `make setup` prepares.
+    //
+    // Version 4 and not 2, for the iptables backend. Version 2 puts Debian on the legacy backend
+    // with no check, that backend needs kernel modules a host running nftables only never loads,
+    // and dockerd then never starts. Version 4 chooses the backend in docker-init.sh instead, from
+    // what /proc/modules actually holds at container start -- the `iptablesSwitchAtRuntime` option,
+    // which is on by default. Do not pin back to :2 without putting the nft repair feature back.
+    "ghcr.io/devcontainers/features/docker-in-docker:4": {
+      // Docker CE rather than moby: the base image is on Debian trixie, which has no moby-cli
+      // package, and the feature stops the build outright rather than falling back.
+      "moby": false
+    },
+
+    // sandbox blocks the VS Code git credential helper, so the host's GitHub token stops reaching
+    // the container. `gh auth login` is the way back to a push, and gh is what the release notes
+    // and workflow runs are read with.
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+
+  // dockerd is started by the docker-in-docker entrypoint, which reads the container environment
+  // and not the /etc/environment that egress-filter writes. Without these, the firewall rejects
+  // every `docker pull` the test harness makes, and the failure reads as a registry timeout.
+  // These point at egress-filter's proxyPort. Drop them if egress-filter is dropped.
+  "containerEnv": {
+    "HTTP_PROXY": "http://127.0.0.1:3128",
+    "HTTPS_PROXY": "http://127.0.0.1:3128",
+    "NO_PROXY": "localhost,127.0.0.1,::1"
+  },
+
+  // The host paths the harness mounts into every test container. A bind mount whose source does not
+  // exist stops the container from starting, and inside here "the host" is this container.
+  "postCreateCommand": "make setup",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "timonwong.shellcheck",
+        "ms-vscode.makefile-tools"
+      ],
+      "settings": {
+        "shellcheck.customArgs": ["-x"],
+        "files.associations": {
+          "devcontainer-feature.json": "jsonc",
+          "scenarios.json": "jsonc"
+        }
+      }
+    }
+  }
+}

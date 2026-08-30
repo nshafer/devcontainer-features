@@ -1,0 +1,14 @@
+# Per-project allowlist for this repo, read by the egress-filter feature at container start.
+# One hostname per line. A leading dot covers the domain and its subdomains. A restart applies an
+# edit. A rebuild is not needed.
+#
+# The presets in devcontainer.json already cover apt, npm, GitHub, Docker Hub, ghcr.io and Claude.
+# What is left is what the test harness reaches beyond those.
+
+# Every base image the tests run on: `node` comes from Docker Hub, and the rest of the matrix is
+# mcr.microsoft.com/devcontainers/*. The layer CDN is data.mcr.microsoft.com, hence the leading dot.
+.mcr.microsoft.com
+
+# The CLI asks containers.dev for a control manifest before it resolves features. The run survives
+# the refusal, but every test starts with "Failed to fetch control manifest: HTTP 403: Filtered".
+containers.dev

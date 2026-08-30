@@ -105,12 +105,12 @@ scenarios:
 
 # The mounts are applied by the harness, and a bind mount whose source does not exist stops the
 # container from starting outright -- Docker does not create it, that is -v behaviour rather than
-# --mount. claude mounts the settings file itself, so the file and not just the directory has to be
-# there. Deliberately does not touch ~/.gitconfig: if that file exists, git ignores ~/.config/git
+# --mount. Only git-config and egress-filter mount a host path, and both mount a directory, so the
+# directory is what has to exist. The two files are for the tests, which read what the mount
+# carries. Deliberately does not touch ~/.gitconfig: if that file exists, git ignores ~/.config/git
 # entirely, so creating an empty one would switch off the whole configuration of an XDG setup.
 setup:
-	@mkdir -p $(HOME)/.claude $(HOME)/.config/git $(HOME)/.config/egress-filter
-	@[ -e $(HOME)/.claude/settings.json ] || echo '{}' > $(HOME)/.claude/settings.json
+	@mkdir -p $(HOME)/.config/git $(HOME)/.config/egress-filter
 	@[ -e $(HOME)/.config/git/config ] || : > $(HOME)/.config/git/config
 	@[ -e $(HOME)/.config/egress-filter/allowlist.txt ] \
 	    || printf '# Hosts every dev container may reach. .example.com covers subdomains.\n' \

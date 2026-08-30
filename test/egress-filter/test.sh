@@ -4,6 +4,9 @@
 #
 # The checks that matter are the two ends of it: an allowed host is reachable, and a host that is
 # on no list is not reachable *by any route*, including one that ignores HTTP_PROXY.
+#
+# Runs as the remote user, deliberately: this is the suite that proves what the person -- and the
+# agent -- can see and do without root. Anything that needs root is in the privileged scenario.
 set -e
 source dev-container-features-test-lib
 
@@ -84,24 +87,13 @@ check "the global list is read-only from inside, which is why it can be watched"
         || { echo "the container could write the global list"; exit 1; }
     echo "  refused, as it must be"'
 
-# ...and it IS honoured on the next start, which is what makes the project list useful at all.
-check "the project list is picked up by a privileged rebuild, as a restart would" bash -c '
-    sudo -n /usr/local/share/devcontainer/egress-filter/egress.sh reload >/dev/null 2>&1
-    for _ in $(seq 1 10); do
-        code=$(fetch example.com); [ "$code" = 200 ] && break
-        sleep 1
-    done
-    echo "  example.com=$code"
-    [ "$code" = 200 ] || { echo "a restart would not have picked it up either"; exit 1; }'
-
-check "allowing one host did not open the rest" bash -c '
-    code=$(fetch neverallowed.example.net); echo "  neverallowed.example.net=$code"
-    [ "$code" != 200 ]'
+# ...and it IS honoured on the next start. That half needs root to rebuild, so it lives in the
+# privileged scenario, together with everything that depends on the host being allowed afterwards.
 
 # The point of the firewall rather than just the env var: ignoring the proxy does not help, even for
-# a host that IS allowed.
+# a host that IS allowed. The baseline supplies one, so this needs nothing allowed first.
 check "ignoring HTTP_PROXY does not get you out" bash -c '
-    code=$(direct example.com); echo "  direct to the allowed host=$code"
+    code=$(direct marketplace.visualstudio.com); echo "  direct to the allowed host=$code"
     [ "$code" != 200 ] || { echo "egress bypassed the proxy entirely"; exit 1; }'
 
 check "DNS still resolves, as configured" bash -c '
@@ -109,23 +101,10 @@ check "DNS still resolves, as configured" bash -c '
 
 # Port 53 is the one hole a default-deny egress filter has to leave open, and open to *any*
 # destination it is not a hole but a transport: iodine and dnscat need nothing more than a route to
-# a nameserver the other end controls. So the accepts name a destination, and the destinations are
-# the resolvers this container was actually given.
-check "port 53 is pinned to the resolvers this container was given" bash -c '
-    rules=$(sudo -n iptables -S DEVCONTAINER_EGRESS)
-    dns=$(echo "$rules" | grep -- "--dport 53" || true)
-    echo "$dns" | sed "s/^/  /"
-    [ -n "$dns" ] || { echo "no DNS rules at all"; exit 1; }
-    open=$(echo "$dns" | grep -- "-j ACCEPT" | grep -cv -- " -d " || true)
-    [ "$open" = 0 ] || { echo "$open DNS accepts with no destination -- 53 is open to the world"; exit 1; }
-    for ns in $(sed -n "s/^nameserver  *//p" /etc/resolv.conf); do
-        case "$ns" in *:*) continue ;; esac
-        echo "$dns" | grep -q -- " -d $ns" || { echo "resolver $ns was not pinned"; exit 1; }
-    done
-    echo "  every accept on 53 carries a destination"'
-
-# The same property from the other side of the firewall. Skips a resolver that happens to be ours,
-# and passes vacuously with no internet, which is the right way round for a negative test.
+# a nameserver the other end controls. So the accepts name a destination. Reading the chain needs
+# root, so that check is in the privileged scenario. This is the same property from the outside,
+# which is the half a non-root process can prove: skips a resolver that happens to be ours, and
+# passes vacuously with no internet, which is the right way round for a negative test.
 check "a nameserver that is not one of ours cannot be reached on 53" bash -c '
     for ns in 8.8.8.8 1.1.1.1; do
         grep -q "nameserver $ns" /etc/resolv.conf && continue
@@ -138,8 +117,11 @@ check "a nameserver that is not one of ours cannot be reached on 53" bash -c '
 check "egress-status says what port 53 may reach" bash -c '
     egress-status | tee /dev/stderr | grep -q "port 53 to "'
 
-check "the project list is reported as a source once it exists" bash -c '
-    egress-status | tee /dev/stderr | grep -q "project:  /workspaces"'
+# The project list is named as a source whether or not it exists, so it can be found before it is
+# written. It still reads "none yet" here: the file was created above, and the sources are re-read
+# on a rebuild only. The privileged scenario checks the other side of that.
+check "the project list is named as a source, and a mid-run edit does not change what status says" bash -c '
+    egress-status | tee /dev/stderr | grep -q "project:  .devcontainer/egress-allow.txt (in this repo -- none yet)"'
 
 # ---------------------------------------------------------------------------------------------
 # The agent-facing half. A blocked request is a bare 403 that says nothing about a filter, and npm

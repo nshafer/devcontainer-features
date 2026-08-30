@@ -1,7 +1,7 @@
 {
   "strict": {
     "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
-    "remoteUser": "node",
+    "remoteUser": "root",
     "features": {
       "egress-filter": {
         "baseline": false,
@@ -14,7 +14,7 @@
   },
   "presets": {
     "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
-    "remoteUser": "node",
+    "remoteUser": "root",
     "features": {
       "egress-filter": {
         "presets": "debian,npm,go"
@@ -23,12 +23,19 @@
   },
   "pinned-dns": {
     "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
-    "remoteUser": "node",
+    "remoteUser": "root",
     "features": {
       "egress-filter": {
         "allow": "example.com",
         "dnsServers": "192.0.2.53"
       }
+    }
+  },
+  "privileged": {
+    "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+    "remoteUser": "root",
+    "features": {
+      "egress-filter": {}
     }
   }
 }

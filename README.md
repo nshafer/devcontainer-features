@@ -276,6 +276,77 @@ notes](src/sandbox).
 `devcontainer-feature.json` changes. It also regenerates each `src/<feature>/README.md` from the
 metadata and the feature's `NOTES.md`. Bump the version in the same commit as the change.
 
+## Develop on the features
+
+This repo has its own `.devcontainer/`, and it runs the features it develops. Open the folder in a
+container and `make lint`, `make test` and `make sandbox` all work from the terminal inside it.
+
+The features come from the working tree, not from `ghcr.io`, so **"Rebuild Container" is how a
+change is tried**. The published copies would exercise the last release instead. The price is that a
+feature whose `install.sh` fails hard also fails the build of this container. Recover with "Reopen
+Folder Locally", fix it, rebuild.
+
+Five things in there are not obvious.
+
+**The feature sources sit behind a symlink.** The CLI refuses a local feature path that resolves
+outside `.devcontainer/`, so `"../src/claude"` fails with *"Resolved path must be a child of the
+.devcontainer/ folder"*. `.devcontainer/src` is a symlink to `../src` and the config names
+`"./src/claude"`. `.devcontainer/.dockerignore` keeps the link out of the build context, where it
+has no job to do: the CLI copies each feature from a temp directory of its own.
+
+**The Docker daemon is inside the container, not on the host.** `devcontainer features test` needs
+Docker, and it needs Docker to see *this* container's filesystem. The harness applies every feature's
+mounts, and those name paths under the home directory of whoever runs the test.
+Docker-outside-of-docker would resolve them against the host home directory instead. So the config
+adds `docker-in-docker`, and `postCreateCommand` runs `make setup` to create the paths the mounts
+expect — the same one-time setup as on a host, for the same reason. It carries one option:
+`"moby": false`. The base image is on Debian trixie, which has no `moby-cli` package, and the
+feature stops the build rather than falling back to Docker CE on its own.
+
+**dockerd has to be told about the proxy.** `egress-filter` writes `HTTP_PROXY` to
+`/etc/environment`, which dockerd never reads: it is started by the docker-in-docker entrypoint,
+from the container environment. Without the three variables in `containerEnv`, the firewall rejects
+every image pull the harness makes, and the failure reads as a registry timeout. Drop them if you
+drop `egress-filter`. Hostnames are configured in two places — the presets on the feature, and
+`.devcontainer/egress-allow.txt` for the rest. A container restart applies an edit to that file.
+
+**`docker-in-docker` is pinned to `:4` for the iptables backend.** Version 2 moves Debian to the
+legacy iptables backend with no check at all, and that backend needs `ip_tables` kernel modules. The
+kernel belongs to the host, and a host running nftables only — Arch, Fedora, a recent Ubuntu — never
+loads them. Two things then break at once, both quietly: dockerd stops at *"can not initialize
+iptables table nat"* and retries forever, and `egress-filter` gets the same refusal on every rule,
+logs each one, and still reports `firewall applied`. Version 4 moved the choice into
+`docker-init.sh`, which reads `/proc/modules` at container start and takes nft when the legacy
+modules are absent. That is the `iptablesSwitchAtRuntime` option, and it is on by default. A pin back
+to `:2` brings the whole failure back, and needs a local feature to set the alternative to nft after
+`docker-in-docker` has had its turn.
+
+One order to keep in mind if that option is ever turned off. The entrypoints run as `egress-filter`,
+`persist-homedir`, `sandbox`, `docker-init.sh`, so `egress-filter` applies its rules before
+`docker-init.sh` chooses the backend. Both land on nft on a host without the legacy modules. On a
+host that has them, dockerd would move to legacy after `egress-filter` had already written its chain
+to nft, and `egress-status` as root would then read the empty backend.
+
+**`sudo` is gone, so the tools ship in the image.** `sandbox` removes the remote user's sudo grant at
+container start, so `make`, `python3`, `shellcheck` and `iptables` are installed in
+`.devcontainer/Dockerfile` rather than added later from a terminal. The same feature blocks the VS
+Code git credential helper, so a push authenticates through `gh auth login`, which is what the
+`github-cli` feature is there for.
+
+**`sudo` is gone from the test containers too, which is why some scenarios run as root.**
+`sandbox` sets `no-new-privileges` on this container. The kernel passes `no_new_privs` to every
+child process and never clears it, so the inner dockerd carries it, and so does every container the
+test harness starts. A setuid binary cannot run there, and `sudo` is setuid. The `egress-filter`
+tests are the only ones that wanted root — to read the iptables chain, and to rebuild the allowlist
+the way a restart would. Those checks live in scenarios whose `remoteUser` is `root`: `strict`,
+`presets`, `pinned-dns`, and `privileged`. `test/egress-filter/test.sh` keeps every check a non-root
+process can prove, which is the half that says what the person and the agent can actually see. Root
+is not exempt from the filter — only the proxy uid is — so a root scenario still measures the
+filter. The whole suite passes here and on a host.
+
+`tidewave` is the one feature this container leaves out. It needs a published port and it drives an
+application, and this repo is shell scripts. Its own tests cover it.
+
 ## Tests
 
 ```bash
@@ -322,8 +393,9 @@ npx @devcontainers/cli features test -f sandbox \
 Those two flags apply to the autogenerated test only. Each feature's `test/<feature>/scenarios.json`
 names its own image, which is how `tidewave` gets tested on Alpine at all — and how `sandbox` gets a
 container with `CAP_SYS_ADMIN`, the only way to build a real bind mount and prove the guard that
-keeps it from writing through to the host. Add `--skip-scenarios` for a faster edit-run loop; CI does
-not, because a scenario is where every non-default option is covered.
+keeps it from writing through to the host. A scenario also names its own `remoteUser`, which is how
+the four `egress-filter` scenarios get root without `sudo`. Add `--skip-scenarios` for a faster
+edit-run loop; CI does not, because a scenario is where every non-default option is covered.
 
 ## The constraints everything here is shaped by
 
