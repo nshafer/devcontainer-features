@@ -14,7 +14,7 @@
         "debian,hex,github",
         "debian,npm,python,github,claude"
       ],
-      "description": "Curated blocks of hostnames for common ecosystems, comma separated. Available: debian, ubuntu, alpine, npm, hex, go, python, rust, github, gitlab, docker, claude. Saves maintaining forty hostnames by hand; an unknown name is a warning, not a silent no-op."
+      "description": "Curated blocks of hostnames for common ecosystems, comma separated. Available: debian, ubuntu, alpine, npm, hex, go, python, rust, github, githubcopilot, gitlab, docker, claude. Saves maintaining forty hostnames by hand; an unknown name is a warning, not a silent no-op."
     },
     "allow": {
       "type": "string",

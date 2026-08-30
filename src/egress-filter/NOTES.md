@@ -53,12 +53,11 @@ already looks like a regex passes through.
 }
 ```
 
-Available: `debian`, `ubuntu`, `alpine`, `npm`, `hex`, `go`, `python`, `rust`, `github`, `gitlab`,
-`docker`, `claude`. Each one is a small commented file under `src/egress-filter/presets/`. The
-comments say which entries the author verified against a real image or client and which the author
-did not. The apt mirrors, npm registry, Go proxy and Hex repo come from the running tools. The rest
-are first guesses. An unknown name is a **warning that lists the valid ones**, never a silent
-no-op.
+Available: `debian`, `ubuntu`, `alpine`, `npm`, `hex`, `go`, `python`, `rust`, `github`, `githubcopilot`, `gitlab`,
+`docker`, `claude`. Each one is a small commented file under `src/egress-filter/presets/`. The comments say which
+entries the author verified against a real image or client and which the author did not. The apt mirrors, npm registry,
+Go proxy and Hex repo come from the running tools. The rest are first guesses. An unknown name is a **warning that lists
+the valid ones**, never a silent no-op.
 
 Two presets are easy to get wrong, and the feature handles both. `go` needs the *source* hosts as
 well as the proxy, because `GOPROXY` ends in `,direct`. `docker` needs three hosts, since a missing
