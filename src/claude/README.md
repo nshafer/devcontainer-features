@@ -1,7 +1,7 @@
 
 # Claude Code (nshafer) (claude)
 
-Installs the Claude Code CLI with the native installer, and can seed ~/.claude/settings.json at build time.
+Installs the Claude Code CLI with the native installer.
 
 ## Example Usage
 
@@ -16,7 +16,6 @@ Installs the Claude Code CLI with the native installer, and can seed ~/.claude/s
 | Options Id | Description | Type | Default Value |
 |-----|-----|-----|-----|
 | version | Version to install: 'stable', 'latest', or an exact X.Y.Z. | string | stable |
-| settings | JSON object written to ~/.claude/settings.json at build time, written with single quotes: {'includeCoAuthoredBy': false}. Double quotes do not survive the devcontainer CLI's option quoting. Empty writes nothing; the CLI owns the file from its first run. | string | - |
 
 ## Customizations
 
@@ -27,7 +26,7 @@ Installs the Claude Code CLI with the native installer, and can seed ~/.claude/s
 ## Host setup
 
 None. This feature mounts nothing from the host. You create no path before the first build.
-Everything comes from the image and the `settings` option.
+Everything comes from the image.
 
 ## Notes
 
@@ -40,31 +39,9 @@ volume, a stale volume, or no volume.
 The feature mounts nothing from the host `~/.claude`. Credentials, transcripts, file history, and
 plans stay on the host. Each container signs in for itself and holds nothing from another project.
 
-`version` takes `stable` (the default), `latest`, or an exact `X.Y.Z`. `settings` seeds
-`~/.claude/settings.json` before the installer runs:
+`version` takes `stable` (the default), `latest`, or an exact `X.Y.Z`.
 
-```jsonc
-"ghcr.io/nshafer/devcontainer-features/claude:1": {
-  "settings": "{'includeCoAuthoredBy': false, 'model': 'opus'}"
-}
-```
+## Settings
 
-**Write that object with single quotes.** The devcontainer CLI writes option values into the
-generated Dockerfile without escaping. A value with double quotes arrives with the quotes collapsed
-and the JSON broken. The feature converts `'` into `"` when it reads the value. The cost: you cannot
-write a value that contains an apostrophe. An unparsable value fails the build and prints the
-received text. It does not build a container whose CLI errors on startup.
-
-The feature seeds the file _before_ the installer on purpose. The installer writes
-`autoUpdatesChannel` into the same file and merges, so both values survive. This is also the last
-time the feature touches the file. From the first run the CLI owns it. The CLI writes the theme,
-model, and update channel back. Expect the CLI to normalize what it finds: `'model': 'opus'` becomes
-`"opus[1m]"`.
-
-A persisted home volume with existing content hides the image copy. A container whose volume
-predates a settings change does not see the change until you recreate the volume.
-
-
----
-
-_Note: This file was auto-generated from the [devcontainer-feature.json](https://github.com/nshafer/devcontainer-features/blob/main/src/claude/devcontainer-feature.json).  Add additional notes to a `NOTES.md`._
+Claude Code reads `.claude/settings.json` from the repository root. Keep your own local config in
+`.claude/settings.local.json`, and gitignore it.

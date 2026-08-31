@@ -2,8 +2,7 @@
 set -e
 source dev-container-features-test-lib
 
-# Default options: the CLI is installed at build time and nothing is seeded. The seeding itself is
-# covered by the seeded_settings scenario, which is the only way to pass an option.
+# The CLI is installed at build time, and the feature writes no settings of its own.
 check "claude runs" claude --version
 check "wrapper is on PATH" bash -c '[ "$(command -v claude)" = "/usr/local/bin/claude" ] || [ -x /usr/local/bin/claude ]'
 check "home install is the canonical layout" bash -c '
@@ -25,10 +24,10 @@ check "nothing from the host's ~/.claude is mounted" bash -c '
 check "nothing runs at postCreate any more" bash -c '
     [ ! -e /usr/local/share/devcontainer/claude/post-create.sh ]'
 
-# The file itself still exists with no settings option: the installer writes autoUpdatesChannel into
-# it when given a version target. What must not be there is anything this feature seeded.
-check "nothing is seeded when the option is empty" bash -c '
+# The file can still exist: the installer writes autoUpdatesChannel into it when given a version
+# target. Nothing else in it comes from this feature.
+check "the feature seeds no settings" bash -c '
     [ ! -e "$HOME/.claude/settings.json" ] ||
-    ! grep -qE "includeCoAuthoredBy|cleanupPeriodDays" "$HOME/.claude/settings.json"'
+    [ "$(node -e "console.log(Object.keys(require(process.env.HOME + \"/.claude/settings.json\")).filter(k => k !== \"autoUpdatesChannel\").length)")" = "0" ]'
 
 reportResults

@@ -10,14 +10,6 @@
 set -euo pipefail
 
 VERSION="${VERSION:-stable}"
-SETTINGS="${SETTINGS:-}"
-
-settings_error() {
-    echo "!!! claude: the settings option is not valid JSON. Received:" >&2
-    echo "!!!   $SETTINGS" >&2
-    echo "!!! Write the object with single quotes, which survive the devcontainer CLI's quoting:" >&2
-    echo "!!!   \"settings\": \"{'includeCoAuthoredBy': false}\"" >&2
-}
 SYSTEM_DIR=/usr/local/share/devcontainer/claude
 
 USERNAME="${_REMOTE_USER:-root}"
@@ -28,7 +20,6 @@ if [ -z "$USER_HOME" ] || [ ! -d "$USER_HOME" ]; then
     USER_HOME="$(getent passwd "$USERNAME" | cut -d: -f6)"
 fi
 : "${USER_HOME:=/home/$USERNAME}"
-USER_GROUP="$(id -gn "$USERNAME")"
 
 echo "==> claude: user=$USERNAME home=$USER_HOME version=$VERSION"
 
@@ -51,41 +42,6 @@ fi
 # The musl build needs these; untested here, taken from the upstream feature.
 if command -v apk >/dev/null 2>&1; then
     apk add --no-cache libgcc libstdc++ ripgrep
-fi
-
-# Seed settings, if any were given. This runs before the installer on purpose: the installer writes
-# autoUpdatesChannel into this same file, and it merges rather than replaces, so seeding first ends
-# with both. It is also the last time this feature touches the file — from the container's first run
-# the CLI owns it, writing theme, model and update channel back to it.
-#
-# Note that a persisted home volume with existing content masks the image's copy, so a container
-# whose volume predates this option will not see it until the volume is recreated.
-if [ -n "$SETTINGS" ]; then
-    # Single quotes in, double quotes out. The devcontainer CLI writes option values into the
-    # generated Dockerfile without escaping them, so a value containing double quotes arrives with
-    # the quotes collapsed and the JSON destroyed. Writing the object with single quotes sidesteps
-    # that entirely, and the translation is a no-op for a value that somehow arrives intact. The
-    # cost is that a setting whose value contains an apostrophe cannot be expressed this way.
-    SETTINGS="$(printf '%s' "$SETTINGS" | tr "'" '"')"
-
-    # A malformed value would otherwise surface as a confusing CLI error in every container built
-    # from it, so reject it here where the message lands next to the cause. Validated only if the
-    # image has something that can parse JSON; no packages are installed for this.
-    if command -v python3 >/dev/null 2>&1; then
-        printf '%s' "$SETTINGS" | python3 -c 'import json,sys; json.load(sys.stdin)' \
-            || { settings_error; exit 1; }
-    elif command -v jq >/dev/null 2>&1; then
-        printf '%s' "$SETTINGS" | jq empty \
-            || { settings_error; exit 1; }
-    else
-        echo "==> claude: no json parser in this image; writing settings unvalidated"
-    fi
-
-    install -d -o "$USERNAME" -g "$USER_GROUP" "$USER_HOME/.claude"
-    printf '%s\n' "$SETTINGS" > "$USER_HOME/.claude/settings.json"
-    chown "$USERNAME:$USER_GROUP" "$USER_HOME/.claude/settings.json"
-    chmod 0644 "$USER_HOME/.claude/settings.json"
-    echo "==> claude: seeded $USER_HOME/.claude/settings.json"
 fi
 
 echo "==> claude: running the native installer as $USERNAME"

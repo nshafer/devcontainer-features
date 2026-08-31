@@ -14,7 +14,7 @@ link:
 | [`git-config`](src/git-config)           | Copies the host's git config and excludes file into the container.                                |
 | [`sandbox`](src/sandbox)                 | Seals the host sockets VS Code forwards in — SSH agent, GPG agent, X11, VS Code IPC.               |
 | [`egress-filter`](src/egress-filter)     | Default-deny outbound networking with a hostname allowlist, enforced in-container.                 |
-| [`claude`](src/claude)                   | Installs the Claude Code CLI and seeds `~/.claude/settings.json` at build time.                   |
+| [`claude`](src/claude)                   | Installs the Claude Code CLI at build time.                                                        |
 | [`tidewave`](src/tidewave)               | Installs the Tidewave CLI and starts it on every container start.                                 |
 
 ## Use per-project

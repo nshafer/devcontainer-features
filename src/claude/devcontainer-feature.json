@@ -1,8 +1,8 @@
 {
   "id": "claude",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "name": "Claude Code (nshafer)",
-  "description": "Installs the Claude Code CLI with the native installer, and can seed ~/.claude/settings.json at build time.",
+  "description": "Installs the Claude Code CLI with the native installer.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/claude",
   "options": {
     "version": {
@@ -13,14 +13,6 @@
         "latest"
       ],
       "description": "Version to install: 'stable', 'latest', or an exact X.Y.Z."
-    },
-    "settings": {
-      "type": "string",
-      "default": "",
-      "description": "JSON object written to ~/.claude/settings.json at build time, written with single quotes: {'includeCoAuthoredBy': false}. Double quotes do not survive the devcontainer CLI's option quoting. Empty writes nothing; the CLI owns the file from its first run.",
-      "proposals": [
-        "{'includeCoAuthoredBy': false}"
-      ]
     }
   },
   "customizations": {
