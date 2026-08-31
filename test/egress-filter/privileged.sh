@@ -63,6 +63,32 @@ check "port 53 is pinned to the resolvers this container was given" bash -c '
     done
     echo "  every accept on 53 carries a destination"'
 
+# auto is the default, and it has to find the subnets docker actually attached this container to --
+# a compose database on 5432 is a peer on one of them, and a default-deny chain rejects it exactly
+# like the internet.
+check "auto opened the subnets this container is attached to" bash -c '
+    rules=$(iptables -S DEVCONTAINER_EGRESS)
+    nets=$(ip -4 route show scope link | awk "\$1 ~ /\\// { print \$1 }")
+    [ -n "$nets" ] || { echo "no on-link subnets to check"; exit 1; }
+    for net in $nets; do
+        echo "$rules" | grep -q -- "-d $net -j ACCEPT" \
+            || { echo "$net is attached but was not opened"; echo "$rules" | sed "s/^/  /"; exit 1; }
+        echo "  $net is reachable directly"
+    done'
+
+check "egress-status reports the same subnets" bash -c '
+    out=$(egress-status | tee /dev/stderr)
+    for net in $(ip -4 route show scope link | awk "\$1 ~ /\\// { print \$1 }"); do
+        echo "$out" | grep -q "$net" || { echo "$net is open but unreported"; exit 1; }
+    done'
+
+# The local accepts match on destination only, so they cannot become a route to the internet.
+check "every local accept carries a destination" bash -c '
+    open=$(iptables -S DEVCONTAINER_EGRESS | grep -- "-j ACCEPT" \
+        | grep -v -- " -d " | grep -v -- "--uid-owner" | grep -v -- "-o lo" | grep -v -- "--state" || true)
+    [ -z "$open" ] || { echo "an accept with no destination: $open"; exit 1; }
+    echo "  no unqualified accept in the chain"'
+
 # The rule the whole design rests on: one uid gets out, everything else lands on the REJECT.
 check "the chain lets exactly one uid out" bash -c '
     rules=$(iptables -S DEVCONTAINER_EGRESS)

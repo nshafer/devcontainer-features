@@ -8,7 +8,8 @@
         "allow": "example.com,.iana.org",
         "deny": ".iana.org",
         "allowDns": false,
-        "proxyPort": "8888"
+        "proxyPort": "8888",
+        "localNetworks": "off"
       }
     }
   },
@@ -28,6 +29,17 @@
       "egress-filter": {
         "allow": "example.com",
         "dnsServers": "192.0.2.53"
+      }
+    }
+  },
+  "local-networks": {
+    "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+    "remoteUser": "root",
+    "features": {
+      "egress-filter": {
+        "allow": "example.com",
+        "localNetworks": "192.168.222.0/24",
+        "noProxy": "db,redis"
       }
     }
   },

@@ -33,6 +33,14 @@ check "deny overrides allow for the same host" bash -c '
         && { echo "denied host is still on the list"; exit 1; }
     code=$(fetch www.iana.org); echo "  www.iana.org=$code"; [ "$code" != 200 ]'
 
+check "localNetworks=off leaves no local subnet in the chain" bash -c '
+    for net in $(ip -4 route show scope link | awk "\$1 ~ /\\// { print \$1 }"); do
+        iptables -S DEVCONTAINER_EGRESS | grep -q -- "-d $net -j ACCEPT" \
+            && { echo "$net was opened despite localNetworks=off"; exit 1; }
+        echo "  $net stays blocked, as configured"
+    done
+    egress-status | tee /dev/stderr | grep -q "local .*none"'
+
 check "allowDns=false blocks the agent resolving for itself" bash -c '
     timeout 8 getent hosts example.com >/dev/null 2>&1 \
         && { echo "DNS still works despite allowDns=false"; exit 1; }

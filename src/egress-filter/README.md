@@ -22,6 +22,8 @@ Default-deny outbound networking, with a hostname allowlist merged from a global
 | projectAllowlist | Where the per-project list lives inside the container. A glob, because a feature's entrypoint is not told the workspace folder. Read once at container start and never re-read - it lives in the repo, where the container's own user can write it. See the README. | string | /workspaces/*/.devcontainer/egress-allow.txt |
 | allowDns | Let the container resolve names directly, against the resolvers in dnsServers only - port 53 to any other host is refused by the firewall. Turning this off closes the remaining slow exfiltration channel but breaks anything that resolves for itself - git, package managers, most clients. See the README. | boolean | true |
 | dnsServers | IPv4 addresses or CIDRs that port 53 may be opened to, comma separated. Empty means the nameservers the container runtime put in /etc/resolv.conf, which is what would have been used anyway. Only consulted when allowDns is on. | string | - |
+| localNetworks | Subnets that may be reached directly, without the proxy - the other containers of a docker-compose project, on 5432 and the like. 'auto' means the subnets this container is attached to, taken from its own routing table and accepted only when they are private. 'off' blocks them. Anything else is a comma separated list of IPv4 CIDRs, which is how you narrow it to one peer. See the README. | string | auto |
+| noProxy | Extra entries for NO_PROXY, comma separated. The firewall already allows localNetworks, but a client that reads HTTP_PROXY sends 'http://db:8080' to the proxy, which denies it. Name such services here: 'db,redis,minio'. | string | - |
 | proxyPort | Loopback port the filtering proxy listens on. | string | 3128 |
 
 ## Host setup
@@ -112,6 +114,59 @@ exists. The feature rewrites it on every reload and says so. The thing to edit i
 the header points at. The feature records `deny` as a removal rather than a silent omission, since a
 host quietly missing from a merged list is the hardest kind of allowlist question to answer.
 
+### Sibling containers, and docker-compose
+
+**A dev container is often one service of a `docker-compose` project.** The others — Postgres on
+5432, Redis on 6379, MinIO on 9000 — are peers on the same docker network. Those connections never
+leave the machine and never touch the proxy, but a default-deny `OUTPUT` chain rejects them exactly
+like a connection to the internet. The symptom is a database that looks down.
+
+**`localNetworks` is the answer, and it is `auto` by default.** The firewall accepts traffic whose
+*destination* is one of the subnets this container is attached to, read from its own routing table:
+
+```
+$ egress-status
+egress-filter:
+  proxy          listening on 127.0.0.1:3128 as egressfilter
+  firewall       default deny, dns=true
+  dns            port 53 to 127.0.0.11 only
+  local          172.18.0.0/16 (direct, no proxy)
+```
+
+The match is on the destination address, so a packet bound for the internet never qualifies. It
+carries an address outside the subnet, even though it leaves through the same gateway.
+
+`auto` accepts a subnet only when it is private — `10/8`, `172.16/12`, `192.168/16`, `100.64/10`,
+`169.254/16`. A public subnet on an interface means host networking or a `macvlan`, where "the local
+network" is the internet, and opening it would undo the filter. That case is a warning and a skip.
+
+**Name the services in `noProxy` if you talk HTTP to them.** The firewall allows the peer, but a
+client that reads `HTTP_PROXY` sends `http://db:8080` to the proxy, which denies it for not being on
+the allowlist. The CIDRs go into `NO_PROXY` automatically, and Go and docker honour them, but `curl`
+and Python match `NO_PROXY` by name only. The feature cannot know what compose called the service,
+so you say it:
+
+```jsonc
+"ghcr.io/nshafer/devcontainer-features/egress-filter:1": {
+  "presets": "debian,npm,github",
+  "noProxy": "db,redis,minio"
+}
+```
+
+**The relaxation is real, and worth naming.** The subnet holds the docker gateway, which is the
+host, and every other container on that network. Those peers usually have unfiltered internet
+access, so an agent that reaches one and makes it relay is out. This is a trade of local
+reachability against that, taken because a filter that breaks the project's own database is a filter
+people turn off. Two ways to tighten it:
+
+| you want | set |
+| --- | --- |
+| one peer only | `"localNetworks": "172.18.0.5/32"` |
+| no local access at all | `"localNetworks": "off"` |
+
+Addresses from docker are not stable across a `docker compose up`, so a `/32` needs a static address
+on the compose network to stay correct.
+
 ### Building a list from evidence
 
 **`egress-denied` is how you build a list from evidence.** It prints every host the container asked
@@ -187,7 +242,8 @@ into queries. `allowDns: false` closes it — the proxy resolves server-side, so
 working — at the cost of anything that resolves for itself: git, package managers, most clients.
 
 **Only HTTP and HTTPS get out.** Anything else — `git+ssh`, arbitrary TCP — is rejected outright.
-This is correct for a default-deny posture, and surprising the first time.
+This is correct for a default-deny posture, and surprising the first time. Peers on the container's
+own docker network are the exception: see `localNetworks` above.
 
 **`NET_ADMIN` is unconditional**, because `capAdd` is static metadata like everything else here.
 That is why this is a separate feature rather than an option on `sandbox`. Only projects that ask for

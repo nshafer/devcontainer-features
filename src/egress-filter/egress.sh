@@ -28,6 +28,8 @@ PROJECT_ALLOWLIST="/workspaces/*/.devcontainer/egress-allow.txt"
 PRESETS=""
 ALLOW_DNS=true
 DNS_SERVERS=""
+LOCAL_NETWORKS=auto
+NO_PROXY_EXTRA=""
 PROXY_PORT=3128
 PROXY_USER=egressfilter
 USERNAME=root
@@ -47,6 +49,7 @@ GLOBAL_LIST_HOST="~/.config/egress-filter/allowlist.txt"
 # merge can be exercised without rebuilding the image.
 PRESETS="${EGRESS_PRESETS:-$PRESETS}"
 DNS_SERVERS="${EGRESS_DNS_SERVERS:-$DNS_SERVERS}"
+LOCAL_NETWORKS="${EGRESS_LOCAL_NETWORKS:-$LOCAL_NETWORKS}"
 FILTER_FILE=/etc/devcontainer/egress-filter/allow.regex
 PROXY_CONF=/etc/devcontainer/egress-filter/tinyproxy.conf
 SOURCES_FILE=/etc/devcontainer/egress-filter/sources.txt
@@ -315,6 +318,100 @@ dns_resolvers() {
     done <<< "$raw"
 }
 
+# Which subnets count as local, and may be reached directly without the proxy.
+#
+# A dev container is often one service of a docker-compose project, and the others -- Postgres on
+# 5432, Redis on 6379 -- are peers on the same docker network. Those connections never touch the
+# proxy and never leave the machine, but a default-deny OUTPUT chain rejects them exactly like a
+# connection to the internet, and the failure looks like the database is down.
+#
+# "auto" means the subnets this container is directly attached to, which is the compose network and
+# nothing else. It is read from the container's own routing table, so it needs no configuration and
+# stays correct when docker renumbers the network on the next `up`.
+#
+# The relaxation is real and worth naming: the subnet contains the docker gateway, which is the
+# host, and every other container on that network. Those peers usually have unfiltered internet
+# access, so an agent that can reach one and make it relay is out. This is a trade of local
+# reachability against that, taken because a filter that breaks the project's own database is a
+# filter people turn off. Narrow it with explicit CIDRs -- localNetworks="172.18.0.5/32" is one peer
+# -- or close it with localNetworks="off".
+PRIVATE_RANGES="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10"
+
+# Base 10 is forced on every octet: 010 is ten in an address and eight in bash arithmetic.
+ip_to_int() {
+    local o1 o2 o3 o4
+    read -r o1 o2 o3 o4 <<< "$(echo "$1" | tr '.' ' ')"
+    echo $(( (10#$o1 << 24) + (10#$o2 << 16) + (10#$o3 << 8) + 10#$o4 ))
+}
+
+# True when the CIDR sits wholly inside one of the private ranges. A prefix shorter than the
+# range's own cannot, which is why the length is compared before the address.
+cidr_is_private() {
+    local cidr="$1" addr bits a r rnet rbits mask
+    addr="${cidr%%/*}"; bits="${cidr#*/}"
+    [ "$bits" = "$cidr" ] && bits=32
+    a="$(ip_to_int "$addr")"
+    for r in $PRIVATE_RANGES; do
+        rnet="$(ip_to_int "${r%%/*}")"; rbits="${r#*/}"
+        [ "$bits" -ge "$rbits" ] || continue
+        mask=$(( (0xFFFFFFFF << (32 - rbits)) & 0xFFFFFFFF ))
+        [ $(( a & mask )) -eq "$rnet" ] && return 0
+    done
+    return 1
+}
+
+# The subnets on the container's own interfaces. iproute2 when it is there, and /proc/net/route
+# when it is not -- the file is always present, and a minimal image without `ip` is common enough
+# that falling back beats reporting no local networks at all.
+on_link_subnets() {
+    if command -v ip >/dev/null 2>&1; then
+        ip -4 route show scope link 2>/dev/null | awk '$1 ~ /\// { print $1 }'
+        return 0
+    fi
+    # Columns: Iface Destination Gateway Flags RefCnt Use Metric Mask MTU Window IRTT.
+    # Addresses are hex, little-endian, so the low byte is the first octet. An on-link route is one
+    # with no gateway and a real mask, which excludes the default route.
+    local iface dest gw rest mask d m bits
+    # shellcheck disable=SC2034  # iface is read to consume the column, not to be used.
+    while read -r iface dest gw rest; do
+        [ "$dest" = Destination ] && continue
+        [ "$gw" = 00000000 ] || continue
+        mask="$(echo "$rest" | awk '{ print $5 }')"
+        [ -n "$mask" ] && [ "$mask" != 00000000 ] || continue
+        d=$((16#$dest)); m=$((16#$mask))
+        bits=0
+        while [ "$m" -ne 0 ]; do bits=$(( bits + (m & 1) )); m=$(( m >> 1 )); done
+        echo "$((d & 255)).$(( (d >> 8) & 255 )).$(( (d >> 16) & 255 )).$(( (d >> 24) & 255 ))/$bits"
+    done < /proc/net/route 2>/dev/null
+}
+
+local_networks() {
+    local n
+    case "$LOCAL_NETWORKS" in
+        off | false | none | "")
+            return 0 ;;
+        auto)
+            for n in $(on_link_subnets); do
+                if cidr_is_private "$n"; then
+                    echo "$n"
+                else
+                    # A public subnet on an interface means host networking or a macvlan, where
+                    # "the local network" is the internet. Opening it would undo the filter.
+                    warn "not treating $n as local: it is outside the private ranges."
+                    warn "  Name it in localNetworks if you meant it."
+                fi
+            done ;;
+        *)
+            for n in $(echo "$LOCAL_NETWORKS" | tr ',' ' '); do
+                if echo "$n" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$'; then
+                    echo "$n"
+                else
+                    warn "ignoring localNetworks entry '$n': not an IPv4 address or CIDR"
+                fi
+            done ;;
+    esac
+}
+
 # Rules are idempotent: the chain is flushed first, so a restart or a reload cannot stack duplicates
 # or leave a half-applied policy.
 apply_firewall() {
@@ -326,6 +423,18 @@ apply_firewall() {
 
     iptables -A DEVCONTAINER_EGRESS -o lo -j ACCEPT
     iptables -A DEVCONTAINER_EGRESS -m state --state ESTABLISHED,RELATED -j ACCEPT
+    # Peers on the container's own networks, by destination address only, so a packet bound for the
+    # internet never matches -- it carries an address outside the subnet even though it leaves
+    # through the same gateway.
+    local nets="" net
+    while IFS= read -r net; do
+        [ -n "$net" ] || continue
+        if iptables -A DEVCONTAINER_EGRESS -d "$net" -j ACCEPT 2>/dev/null; then
+            nets="${nets:+$nets }$net"
+        else
+            warn "iptables refused a local-network rule for $net; peers on it stay blocked"
+        fi
+    done <<< "$(local_networks)"
     # Per resolver, not per port: everything else on 53 falls through to the REJECT below.
     if [ "$ALLOW_DNS" = true ]; then
         resolvers="$(dns_resolvers)"
@@ -351,40 +460,53 @@ apply_firewall() {
     iptables -A DEVCONTAINER_EGRESS -j REJECT --reject-with icmp-port-unreachable
 
     iptables -A OUTPUT -j DEVCONTAINER_EGRESS
-    # Line 1 is the marker, line 2 the resolvers that were actually pinned. Two lines rather than
-    # one because status has to answer both questions and cannot query iptables without root.
-    { echo applied; echo "$pinned"; } > "$STATE_FILE" 2>/dev/null
+    # Line 1 is the marker, line 2 the resolvers that were actually pinned, line 3 the local
+    # subnets that were opened. Separate lines because status has to answer all three questions and
+    # cannot query iptables without root.
+    { echo applied; echo "$pinned"; echo "$nets"; } > "$STATE_FILE" 2>/dev/null
     chmod 0644 "$STATE_FILE" 2>/dev/null
-    log "firewall applied: default deny, out via uid $uid only, dns=${pinned:-none}"
+    log "firewall applied: default deny, out via uid $uid only, dns=${pinned:-none}," \
+        "local=${nets:-none}"
 }
 
 flush_firewall() {
     iptables -D OUTPUT -j DEVCONTAINER_EGRESS 2>/dev/null
     iptables -F DEVCONTAINER_EGRESS 2>/dev/null
     iptables -X DEVCONTAINER_EGRESS 2>/dev/null
-    { echo absent; echo; } > "$STATE_FILE" 2>/dev/null
+    { echo absent; echo; echo; } > "$STATE_FILE" 2>/dev/null
     log "firewall removed"
 }
 
 # Advisory, and labelled as such. Tools that honour it get working networking without being told;
 # tools that ignore it get REJECT instead of a silent bypass, which is the property that matters.
 write_proxy_env() {
-    local url="http://127.0.0.1:$PROXY_PORT"
+    local url="http://127.0.0.1:$PROXY_PORT" no_proxy="localhost,127.0.0.1"
+    # The firewall lets a peer through, and NO_PROXY is what stops a client sending the request to
+    # the proxy instead, where it would be denied for not being on the allowlist. CIDRs cover the
+    # clients that understand them (Go, docker); a service reached by name -- "db", "redis" -- has
+    # to be named in the noProxy option, because nothing here can know what compose called it.
+    local net
+    while IFS= read -r net; do
+        [ -n "$net" ] && no_proxy="$no_proxy,$net"
+    done <<< "$(local_networks 2>/dev/null)"
+    [ -n "$NO_PROXY_EXTRA" ] && no_proxy="$no_proxy,$NO_PROXY_EXTRA"
     cat > /etc/profile.d/00-devcontainer-egress-filter.sh <<EOF
 # Installed by the egress-filter feature. The firewall is the control; this is the convenience.
 export HTTP_PROXY=$url  http_proxy=$url
 export HTTPS_PROXY=$url https_proxy=$url
-export NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1
+export NO_PROXY=$no_proxy no_proxy=$no_proxy
 EOF
     chmod 0644 /etc/profile.d/00-devcontainer-egress-filter.sh
     # Read by PAM and by VS Code's environment probe, so terminals inherit it too.
-    sed -i '/devcontainer-egress-filter/,+4d' /etc/environment 2>/dev/null
+    sed -i '/devcontainer-egress-filter/,+6d' /etc/environment 2>/dev/null
     {
         echo "# devcontainer-egress-filter"
         echo "HTTP_PROXY=$url"
         echo "HTTPS_PROXY=$url"
         echo "http_proxy=$url"
         echo "https_proxy=$url"
+        echo "NO_PROXY=$no_proxy"
+        echo "no_proxy=$no_proxy"
     } >> /etc/environment
 }
 
@@ -428,6 +550,20 @@ status() {
         else
             printf '  %-14s NO RESOLVER -- name resolution will fail\n' "dns"
         fi
+    fi
+
+    # Line 3 of the state file, for the same reason as the resolvers: what was opened, not what
+    # would be. An unprivileged status has no other way to know.
+    local nets
+    if [ "$applied" = yes ]; then
+        nets="$(sed -n 3p "$STATE_FILE" 2>/dev/null)"
+    else
+        nets="$(local_networks 2>/dev/null | paste -sd' ' -)"
+    fi
+    if [ -n "$nets" ]; then
+        printf '  %-14s %s (direct, no proxy)\n' "local" "$nets"
+    else
+        printf '  %-14s none -- peers on the docker network are blocked too\n' "local"
     fi
 
     printf '  %-14s %s patterns (%s)\n' "allowlist" \

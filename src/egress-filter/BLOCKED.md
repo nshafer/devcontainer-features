@@ -24,6 +24,18 @@ npm's message is misleading: it is not a version problem, a registry problem, or
 problem. If a request fails with 403 and you did not expect an authorisation error, run
 `egress-status` before doing anything else.
 
+## What is *not* blocked
+
+Other containers on this container's own docker network — a `docker-compose` database on 5432, a
+cache on 6379 — are reachable directly. The firewall allows the subnets this container is attached
+to. `egress-status` prints them on the `local` line. So a connection that fails to a service like
+that is an ordinary problem — the service is not up, the port is wrong, the name does not resolve —
+and not this filter.
+
+One exception, for HTTP to such a service: a client that reads `HTTP_PROXY` sends the request to the
+proxy, which denies it. The fix belongs in the feature's `noProxy` option and needs a restart, so
+report it the same way as a blocked host.
+
 ## What will not work
 
 There is deliberately no command in this container that adds a host to the allowlist. If there

@@ -14,6 +14,8 @@ BASELINE="${BASELINE:-true}"
 PROJECT_ALLOWLIST="${PROJECTALLOWLIST:-/workspaces/*/.devcontainer/egress-allow.txt}"
 ALLOW_DNS="${ALLOWDNS:-true}"
 DNS_SERVERS="${DNSSERVERS:-}"
+LOCAL_NETWORKS="${LOCALNETWORKS:-auto}"
+NO_PROXY_EXTRA="${NOPROXY:-}"
 PROXY_PORT="${PROXYPORT:-3128}"
 
 SHARE_DIR=/usr/local/share/devcontainer/egress-filter
@@ -44,8 +46,24 @@ for ns in $(echo "$DNS_SERVERS" | tr ',' ' '); do
     fi
 done
 
+# Same shape check as dnsServers, and for the same reason: a typo here is not a build error, it is
+# a container where the database is unreachable and nothing says why. "auto" and "off" are the two
+# words; everything else is a list of addresses.
+case "$LOCAL_NETWORKS" in
+    auto | off | false | none | '') ;;
+    *)
+        for net in $(echo "$LOCAL_NETWORKS" | tr ',' ' '); do
+            if ! echo "$net" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$'; then
+                echo "!!! egress-filter: localNetworks takes 'auto', 'off', or IPv4 CIDRs." \
+                     "Received: $net" >&2
+                exit 1
+            fi
+        done
+        ;;
+esac
+
 echo "==> egress-filter: baseline=$BASELINE presets=${PRESETS:-none} dns=$ALLOW_DNS" \
-     "resolvers=${DNS_SERVERS:-from /etc/resolv.conf} port=$PROXY_PORT"
+     "resolvers=${DNS_SERVERS:-from /etc/resolv.conf} local=$LOCAL_NETWORKS port=$PROXY_PORT"
 
 # Installing the feature is what turns filtering on -- there is no enabled option, because not
 # wanting a default-deny network is expressed by not adding the feature.
@@ -101,6 +119,8 @@ BASELINE=$BASELINE
 PROJECT_ALLOWLIST="$PROJECT_ALLOWLIST"
 ALLOW_DNS=$ALLOW_DNS
 DNS_SERVERS="$DNS_SERVERS"
+LOCAL_NETWORKS="$LOCAL_NETWORKS"
+NO_PROXY_EXTRA="$NO_PROXY_EXTRA"
 PROXY_PORT=$PROXY_PORT
 PROXY_USER=$PROXY_USER
 USERNAME=$USERNAME
