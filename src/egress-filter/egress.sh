@@ -377,7 +377,7 @@ on_link_subnets() {
         [ "$dest" = Destination ] && continue
         [ "$gw" = 00000000 ] || continue
         mask="$(echo "$rest" | awk '{ print $5 }')"
-        [ -n "$mask" ] && [ "$mask" != 00000000 ] || continue
+        case "$mask" in '' | 00000000) continue ;; esac
         d=$((16#$dest)); m=$((16#$mask))
         bits=0
         while [ "$m" -ne 0 ]; do bits=$(( bits + (m & 1) )); m=$(( m >> 1 )); done
