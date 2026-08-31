@@ -26,7 +26,7 @@ everywhere. The standalone `devcontainer` CLI reads the config and nothing else,
 ```jsonc
 {
   "name": "my-project",
-  "build": { "dockerfile": "Dockerfile" },
+  "image": "elixir:latest",
   "remoteUser": "devc",
   "features": {
     // Optional. Every feature here declares installsAfter common-utils, so if you use it, it runs
@@ -36,76 +36,24 @@ everywhere. The standalone `devcontainer` CLI reads the config and nothing else,
     "ghcr.io/nshafer/devcontainer-features/claude:1": {},
     "ghcr.io/nshafer/devcontainer-features/git-config:1": {},
     "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {},
-    "ghcr.io/nshafer/devcontainer-features/sandbox:1": {}
+    "ghcr.io/nshafer/devcontainer-features/sandbox:1": {},
+    "ghcr.io/nshafer/devcontainer-features/egress-filter:1": {},
   }
 }
 ```
 
-`{}` takes every default, and the defaults are the configuration I want. Spelled out, they are:
-
-```jsonc
-"features": {
-  "ghcr.io/nshafer/devcontainer-features/claude:1": {
-    "version": "stable",          // or "latest", or an exact X.Y.Z
-    "settings": ""                // "{'includeCoAuthoredBy': false}" — single quotes, see the claude notes
-  },
-
-  // No options at all.
-  "ghcr.io/nshafer/devcontainer-features/git-config:1": {},
-  "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {},
-
-  "ghcr.io/nshafer/devcontainer-features/sandbox:1": {
-    "blockSshAgent": true,
-    "blockGpgAgent": true,
-    "blockX11": true,
-    "blockVscodeIpc": true,
-    "scrubEnv": true,
-    "sweepInterval": "1"          // seconds; only the backstop, sealing is inotify-driven
-  },
-
-  // Needs sandbox and its sudo drop, and adds the NET_ADMIN capability. See the egress-filter notes.
-  "ghcr.io/nshafer/devcontainer-features/egress-filter:1": {
-    "presets": "",                // e.g. "debian,npm,go,github,claude"
-    "allow": "",
-    "deny": "",
-    "baseline": true,             // hosts VS Code needs to attach and install extensions
-    "allowDns": true,             // a side channel; false closes it, and breaks self-resolving tools
-    "proxyPort": "3128"
-  },
-
-  "ghcr.io/nshafer/devcontainer-features/tidewave:1": {
-    "version": "latest",          // or an exact X.Y.Z matching a tidewave_app release tag
-    "port": "9000",
-    "allowRemoteAccess": true,    // nothing reaches the CLI without it
-    "autostart": true
-  }
-},
-
-// tidewave only, and not optional: a feature cannot open a port or read the host's home path.
-"appPort": ["127.0.0.1:9000:9000"],
-"remoteEnv": { "TIDEWAVE_HOST_PATH": "${localEnv:TIDEWAVE_HOST_PATH}" }
-```
-
-Do two things before the first build. First, run the [one-time host setup](#one-time-host-setup).
-`git-config` and `egress-filter` bind-mount host paths, and a missing source stops the container from
-starting. Second, decide about `sandbox` on purpose. It is the one feature here that takes things
-away, `sudo` included, and everything in [its notes](src/sandbox) applies to everyone who builds this
-config.
-
-`:1` is a major-version tag, and the build resolves it to the newest `1.x`. `devcontainer up` writes
-the digest it resolved into a `devcontainer-lock.json` beside the config. Commit that file to hold
-every machine to the same feature build, and run `devcontainer upgrade` to move it forward.
-
 ## Use with local overrides
 
-A committed `devcontainer.json` describes the project, and your agent setup is not the project.
-Nobody else on the repo asked to have their `sudo` removed. The VS Code user setting below solves
-that for containers VS Code starts, but the CLI ignores it, so a `devcontainer up` container gets a
-bare project again.
+A committed `devcontainer.json` describes the project, and your local tools do not belong in the project. Nobody else on
+the repo asked to have their `sudo` removed or most of the internet blocked. This can be solved with [Repository
+configuration
+folders](https://code.visualstudio.com/docs/devcontainers/create-dev-container#_alternative-repository-configuration-folders)
+but those require copying the whole devcontainer.json to customize it. What would be nice is a way to merge just a few
+local override settings into the committed config. That is what `devc` does.
 
-The spec has no inheritance between configs. The CLI reads exactly one file, and `--config` names
-it. So [`bin/devc`](bin/devc) does the inheritance instead: it merges a gitignored override file
-over the committed config, writes the result, and passes `--config` for you.
+The spec has no inheritance between configs. The CLI reads exactly one file with `--config`. So [`bin/devc`](bin/devc)
+does the inheritance instead: it merges a gitignored override file over the committed config, writes the result, and
+passes `--config` for you, before calling the real CLI.
 
 ```
 .devcontainer/
@@ -240,8 +188,7 @@ Four more notes:
 
 ## Use them everywhere
 
-Add them once to the VS Code user `settings.json`, and every dev container gets them, without the
-project's `devcontainer.json` naming them:
+Another option with VS Code is to use the "Default Features" setting to use features in every project without having to add them to the `devcontainer.json` at all:
 
 ```jsonc
 "dev.containers.defaultFeatures": {
