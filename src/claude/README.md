@@ -45,3 +45,8 @@ plans stay on the host. Each container signs in for itself and holds nothing fro
 
 Claude Code reads `.claude/settings.json` from the repository root. Keep your own local config in
 `.claude/settings.local.json`, and gitignore it.
+
+
+---
+
+_Note: This file was auto-generated from the [devcontainer-feature.json](https://github.com/nshafer/devcontainer-features/blob/main/src/claude/devcontainer-feature.json).  Add additional notes to a `NOTES.md`._
