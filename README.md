@@ -151,11 +151,12 @@ everywhere. The standalone `devcontainer` CLI reads the config and nothing else,
     // first and they see the user it created. Give it the same username the container runs as.
     "ghcr.io/devcontainers/features/common-utils:2": { "username": "devc" },
 
-    "ghcr.io/nshafer/devcontainer-features/claude:1": {},
-    "ghcr.io/nshafer/devcontainer-features/git-config:2": {},
     "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {},
+    "ghcr.io/nshafer/devcontainer-features/git-config:2": {},
     "ghcr.io/nshafer/devcontainer-features/sandbox:2": {},
     "ghcr.io/nshafer/devcontainer-features/egress-filter:2": {},
+    "ghcr.io/nshafer/devcontainer-features/claude:1": {},
+    "ghcr.io/nshafer/devcontainer-features/tidewave:1": {}
   },
 
   // git-config and egress-filter read a mount that you declare and they do not. See Host setup
@@ -218,8 +219,8 @@ Add the override file to the repo's `.gitignore`, to a local workspace-only `.gi
 or to your global `~/.config/git/ignore`:
 
 ```gitignore
-*.local.json
-*.local.yml
+.devcontainer/*.local.json
+.devcontainer/*.local.yml
 ```
 
 The second line covers the local compose file below. `devc` warns on every run while the override
@@ -233,15 +234,13 @@ are allowed, as in any `devcontainer.json`:
 
 ```jsonc
 {
-  // A different user, because common-utils below creates it.
-  "remoteUser": "devc",
-
   "features": {
-    "ghcr.io/devcontainers/features/common-utils:2": { "username": "devc" },
-    "ghcr.io/nshafer/devcontainer-features/sandbox:2": {},
-    "ghcr.io/nshafer/devcontainer-features/claude:1": {},
+    "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {},
     "ghcr.io/nshafer/devcontainer-features/git-config:2": {},
-    "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {}
+    "ghcr.io/nshafer/devcontainer-features/sandbox:2": {},
+    "ghcr.io/nshafer/devcontainer-features/egress-filter:2": {},
+    "ghcr.io/nshafer/devcontainer-features/claude:1": {},
+    "ghcr.io/nshafer/devcontainer-features/tidewave:1": {}
   },
 
   // git-config and egress-filter read a mount that you declare and they do not. See Host setup
@@ -299,12 +298,6 @@ The override file names both, in order:
 // .devcontainer/devcontainer.local.json -- gitignored
 {
   "dockerComposeFile": ["docker-compose.yml", "docker-compose.local.yml"],
-
-  "features": {
-    "ghcr.io/devcontainers/features/common-utils:2": { "username": "devc" },
-    "ghcr.io/nshafer/devcontainer-features/git-config:2": {},
-    "ghcr.io/nshafer/devcontainer-features/egress-filter:2": {}
-  }
 }
 ```
 
