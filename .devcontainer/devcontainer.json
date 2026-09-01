@@ -46,9 +46,9 @@
       "moby": false
     },
 
-    // sandbox blocks the VS Code git credential helper, so the host's GitHub token stops reaching
-    // the container. `gh auth login` is the way back to a push, and gh is what the release notes
-    // and workflow runs are read with.
+    // sandbox 2.x leaves the git askpass channel open, so a push from the editor authenticates
+    // again. gh is still here: it reads the release notes and the workflow runs, and it is the way
+    // back to a push for anyone who sets blockGitAskpass to true.
     "ghcr.io/devcontainers/features/github-cli:1": {}
   },
 
