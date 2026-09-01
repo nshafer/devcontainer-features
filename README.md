@@ -214,13 +214,16 @@ ln -s ~/src/devcontainer-features/bin/devc ~/bin/devc
 one, as a path or as a whole command line. The npx fallback covers `up`, `build` and `exec`, but
 not `open`. The npm package carries no `open` subcommand, and `devc` says so before it runs.
 
-Add the override file to the repo's `.gitignore`, or to your global one:
+Add the override file to the repo's `.gitignore`, to a local workspace-only `.git/info/exclude`,
+or to your global `~/.config/git/ignore`:
 
 ```gitignore
 *.local.json
+*.local.yml
 ```
 
-`devc` warns on every run while that file is still committable. The generated `local/` directory
+The second line covers the local compose file below. `devc` warns on every run while the override
+file is still committable, and it checks the override file only. The generated `local/` directory
 needs no entry, because `devc` writes a `.gitignore` of `*` inside it.
 
 ### Write the override file
@@ -241,6 +244,14 @@ are allowed, as in any `devcontainer.json`:
     "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {}
   },
 
+  // git-config and egress-filter read a mount that you declare and they do not. See Host setup
+  // above. In a compose project, drop these two lines and put the mounts in a local compose
+  // file instead. See "Add a local compose file" below.
+  "mounts": [
+    "type=bind,src=${localEnv:HOME}/.config/git,dst=/mnt/git-config,readonly",
+    "type=bind,src=${localEnv:HOME}/.config/egress-filter,dst=/mnt/egress-filter,readonly"
+  ],
+
   "customizations": {
     "vscode": { "extensions+": ["anthropic.claude-code"] }
   }
@@ -260,6 +271,75 @@ The merge follows five rules:
 Rows three and four are the pair to keep straight. `features` is an object, so a feature you add
 lands beside the project's features. A list is not an object, so `"extensions"` throws the base
 list away and `"extensions+"` keeps it.
+
+### Add a local compose file
+
+A compose project takes the same treatment one level down. `dockerComposeFile` accepts a list,
+compose merges the files in order, and the last file wins. So the override file names a second
+compose file, and that file holds your mounts. This is the pattern VS Code documents in [Extend
+your Docker Compose file for
+development](https://code.visualstudio.com/docs/devcontainers/create-dev-container#_extend-your-docker-compose-file-for-development),
+with the extra file kept out of the repository.
+
+The committed config names one file:
+
+```jsonc
+// .devcontainer/devcontainer.json -- committed
+{
+  "name": "my-project",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspace"
+}
+```
+
+The override file names both, in order:
+
+```jsonc
+// .devcontainer/devcontainer.local.json -- gitignored
+{
+  "dockerComposeFile": ["docker-compose.yml", "docker-compose.local.yml"],
+
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": { "username": "devc" },
+    "ghcr.io/nshafer/devcontainer-features/git-config:2": {},
+    "ghcr.io/nshafer/devcontainer-features/egress-filter:2": {}
+  }
+}
+```
+
+Write the whole list. `"dockerComposeFile+"` fails here, because the base value is a string and the
+`+` suffix needs a list on both sides. Where the base config already holds a list, `+` appends to
+it.
+
+Then write the local compose file beside the two configs. The service name has to match the
+`service` in the config, and every other key merges into the committed service:
+
+```yaml
+# .devcontainer/docker-compose.local.yml -- gitignored
+services:
+  app:
+    volumes:
+      - ${HOME}/.config/git:/mnt/git-config:ro
+      - ${HOME}/.config/egress-filter:/mnt/egress-filter:ro
+```
+
+Three things to know:
+
+- **Both paths stay relative to `.devcontainer/`**, the same as in the committed config. `devc`
+  rewrites them for the generated config, which sits one directory deeper. A compose file at the
+  repository root is `../docker-compose.yml` in both files.
+- **Compose reads `${HOME}` from your shell, not from the devcontainer variables.** Compose
+  resolves the variable itself, so `${localEnv:HOME}` means nothing in this file. An unset
+  variable becomes an empty string, and the source turns into `/.config/git`.
+- **This is the only way to get a read-only mount into a compose project.** A `mounts` entry in
+  `devcontainer.json` renders as `<source>:<target>` and loses the flag, and the CLI's own override
+  file comes last, so it wins on any target path you name twice. See [In a compose project, put the
+  mount in the compose file](#in-a-compose-project-put-the-mount-in-the-compose-file) above.
+
+`devc` does not warn about the compose file, so keep the `*.local.yml` line in `.gitignore`. With
+`--local-config gpu`, name the file yourself and match it: `docker-compose.gpu.yml` beside
+`devcontainer.gpu.json`.
 
 ### What devc rewrites
 
