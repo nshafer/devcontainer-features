@@ -44,6 +44,54 @@ add hosts later.
 This feature also needs `sandbox` and its sudo drop. A remote user with sudo runs `iptables -F` and
 the whole filter is gone. Use the two features together.
 
+## Rootless Docker and Podman
+
+This feature works under rootless Docker and under Podman, but the host has to be prepared. Three
+things differ, and the first one is the only one that stops the filter completely.
+
+**Load the kernel modules on the host.** A container cannot load a kernel module, and a rootless
+container may not even ask: its netfilter tables live in a user namespace, and a user namespace
+never autoloads. With a rootful `dockerd` this never shows, because the daemon writes its own
+`iptables` rules on the host and the modules are already loaded by the time any container starts. A
+Podman host may have used netfilter for nothing at all. Load them once, on the host:
+
+```bash
+printf '%s\n' ip_tables iptable_filter xt_conntrack xt_owner ipt_REJECT \
+  | sudo tee /etc/modules-load.d/devcontainer-egress.conf
+sudo systemctl restart systemd-modules-load
+```
+
+A missing module does not leave a half-built firewall. The chain comes down, `up` returns non-zero,
+and the reason is written where an unprivileged reader can see it — run `egress-status`, and read
+`/var/log/devcontainer/egress-filter.log` for the full text. The container starts with egress open
+and says so, which is the same trade the rest of this feature makes.
+
+**Set `localNetworks` yourself under Podman.** Podman 5 uses `pasta` by default, and `pasta` copies
+the host's address and routes into the container. `auto` reads the routing table, so it sees your
+LAN subnet, accepts it as private, and opens your whole home network. Name the setting instead:
+
+```json
+"features": {
+    "ghcr.io/nshafer/devcontainer-features/egress-filter:1": { "localNetworks": "off" }
+}
+```
+
+`slirp4netns` gives `10.0.2.0/24` and needs nothing. Under rootless Docker the subnet is the usual
+private bridge range, and `auto` is correct there.
+
+**Relabel the mount under SELinux.** On Fedora and RHEL the read-only bind mount of
+`~/.config/egress-filter` carries no SELinux option, so the container cannot read the global list.
+Relabel the directory on the host:
+
+```bash
+chcon -Rt container_file_t ~/.config/egress-filter
+```
+
+One thing to confirm on your own host: `-m owner --uid-owner` is the whole enforcement boundary, and
+it has to match the proxy's uid inside the user namespace. Recent kernels map the uid through the
+network namespace owner, so it holds. Run `egress-status` after the first build and read the
+`firewall` line before you trust it.
+
 ## Notes
 
 Default-deny outbound networking, decided by hostname. Two halves work together:

@@ -265,6 +265,25 @@ These need no host filesystem setup. `sandbox` has recommended host *settings* t
 forwarded channels — unforwarding the sockets and turning off the Wayland mount. See [its
 notes](src/sandbox).
 
+### Rootless Docker and Podman
+
+Five of the six features need nothing extra. `egress-filter` needs the host to load five kernel
+modules. A rootless container cannot load one itself, and a Podman host often never used netfilter
+at all:
+
+```bash
+printf '%s\n' ip_tables iptable_filter xt_conntrack xt_owner ipt_REJECT \
+  | sudo tee /etc/modules-load.d/devcontainer-egress.conf
+sudo systemctl restart systemd-modules-load
+```
+
+Under Podman, also set `localNetworks` yourself. `pasta` copies the host routes into the container,
+so `auto` would open your LAN. Under SELinux, relabel the two mounted directories.
+
+Both steps are in [the egress-filter notes](src/egress-filter#rootless-docker-and-podman), with what
+a missing module looks like. `sandbox` holds unchanged. [Its notes](src/sandbox#rootless-docker-and-podman)
+say why, and what to check under `--userns=keep-id`.
+
 ## Publishing
 
 `.github/workflows/release.yaml` publishes on a push to `main` when a feature's `version` in its

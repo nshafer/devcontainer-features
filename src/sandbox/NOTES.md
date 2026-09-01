@@ -38,6 +38,30 @@ remote user who regains root undoes every seal. Add `no-new-privileges` yourself
 the feature does not set it, because it cannot be conditional and it breaks restricted sudo. See
 the sudo section below.
 
+## Rootless Docker and Podman
+
+The seals hold. Every one of them is a `chown root` and a `chmod 000` **inside** the container, and
+inside a rootless container root is still root — it owns the user namespace the container runs in.
+The sudo drop holds for the same reason. Nothing in this feature asks the host for a capability.
+
+What changes is the reason to use it, and the change is smaller than it looks. Under a rootless
+runtime, a process that breaks out of the container lands on your unprivileged host account rather
+than on host root. That closes one path and leaves this feature's path open: VS Code still forwards
+your SSH agent, your GPG agent, your display and your GitHub token into the container, and those
+sockets answer to anything inside it. A rootless runtime does not make a forwarded credential any
+less forwarded. Read [what this actually buys you](#what-this-actually-buys-you--read-this-first)
+again with that in mind — the numbers there do not move.
+
+Two things to check on your own host:
+
+- **The `userns` flag.** Podman with `--userns=keep-id` maps your host uid into the container and
+  renumbers everything else. The seals assume a mapped root. Build one container with the exact
+  flag you plan to use, then read `/var/log/devcontainer/sandbox.log` and confirm each block
+  reports success.
+- **SELinux.** On Fedora and RHEL, a socket VS Code forwards through a bind mount is already
+  labelled by the runtime. This feature leaves a bind mount alone rather than sealing it, and says
+  so in the log, so SELinux changes what the report says and not what the feature does.
+
 ## What this feature does
 
 VS Code's Dev Containers extension forwards a set of host sockets into every container it starts.

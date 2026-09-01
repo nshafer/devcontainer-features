@@ -412,6 +412,46 @@ local_networks() {
     esac
 }
 
+# Every module this chain needs, in the order the rules below use them. Named so the failure can
+# say which one, because the kernel's own message for a missing match -- "No chain/target/match by
+# that name" -- names nothing and sends people to look for a typo.
+REQUIRED_MODULES="ip_tables iptable_filter xt_conntrack xt_owner ipt_REJECT"
+
+# Printed once, the first time a rule is refused.
+#
+# A container cannot load a kernel module. With a rootful dockerd that never shows, because the
+# daemon writes its own iptables rules on the host and the modules are loaded before any container
+# starts. Under a rootless runtime -- rootless Docker, or Podman -- nothing on the host has
+# necessarily used netfilter at all, the container's tables live in a user namespace, and a user
+# namespace may not autoload. So the modules have to be on the host already, and loading them is
+# the host's job, not this container's.
+MODULE_HINT_SHOWN=no
+module_hint() {
+    [ "$MODULE_HINT_SHOWN" = yes ] && return 0
+    MODULE_HINT_SHOWN=yes
+    warn "The kernel refused a match this firewall needs."
+    warn "  A container cannot load a kernel module, and under a rootless runtime -- rootless"
+    warn "  Docker, or Podman -- nothing else has necessarily loaded these. Load them on the host:"
+    warn "    printf '%s\\n' $REQUIRED_MODULES | sudo tee /etc/modules-load.d/devcontainer-egress.conf"
+    warn "    sudo systemctl restart systemd-modules-load"
+    warn "  Then rebuild the container. Check NET_ADMIN as well: this feature asks for the"
+    warn "  capability, but a runtime configured to refuse it fails here in the same way."
+}
+
+# Adds one rule to the chain and names it when the kernel refuses.
+#
+# Failing loudly matters more here than anywhere else in this file, and in both directions. A chain
+# that loses its owner rule blocks the proxy too, so the container has no route out at all. A chain
+# that loses its REJECT filters nothing while every report says it does. Neither is a state to
+# start a container in quietly.
+add_rule() {
+    local why="$1"; shift
+    iptables -A DEVCONTAINER_EGRESS "$@" 2>/dev/null && return 0
+    warn "iptables refused the $why rule: $*"
+    module_hint
+    return 1
+}
+
 # Rules are idempotent: the chain is flushed first, so a restart or a reload cannot stack duplicates
 # or leave a half-applied policy.
 apply_firewall() {
@@ -419,20 +459,31 @@ apply_firewall() {
     uid="$(id -u "$PROXY_USER" 2>/dev/null)" || { warn "no $PROXY_USER user; refusing to firewall"; return 1; }
 
     iptables -F DEVCONTAINER_EGRESS 2>/dev/null || iptables -N DEVCONTAINER_EGRESS 2>/dev/null
+    # The chain itself is the first thing that can fail, and it fails for a different reason than a
+    # single rule does: no NET_ADMIN, or no ip_tables at all. Checked rather than assumed, because
+    # every -A below would then fail too and the pile of warnings would bury the cause.
+    if ! iptables -S DEVCONTAINER_EGRESS >/dev/null 2>&1; then
+        warn "iptables cannot create a chain, so nothing can be filtered."
+        module_hint
+        flush_firewall "iptables cannot create a chain (NET_ADMIN, or the ip_tables module)"
+        return 1
+    fi
     iptables -D OUTPUT -j DEVCONTAINER_EGRESS 2>/dev/null
 
-    iptables -A DEVCONTAINER_EGRESS -o lo -j ACCEPT
-    iptables -A DEVCONTAINER_EGRESS -m state --state ESTABLISHED,RELATED -j ACCEPT
+    add_rule loopback -o lo -j ACCEPT || {
+        flush_firewall "iptables refused the loopback rule"; return 1; }
+    add_rule "established-connection" -m state --state ESTABLISHED,RELATED -j ACCEPT || {
+        flush_firewall "the kernel has no xt_conntrack module"; return 1; }
     # Peers on the container's own networks, by destination address only, so a packet bound for the
     # internet never matches -- it carries an address outside the subnet even though it leaves
     # through the same gateway.
     local nets="" net
     while IFS= read -r net; do
         [ -n "$net" ] || continue
-        if iptables -A DEVCONTAINER_EGRESS -d "$net" -j ACCEPT 2>/dev/null; then
+        if add_rule "local-network" -d "$net" -j ACCEPT; then
             nets="${nets:+$nets }$net"
         else
-            warn "iptables refused a local-network rule for $net; peers on it stay blocked"
+            warn "  peers on $net stay blocked"
         fi
     done <<< "$(local_networks)"
     # Per resolver, not per port: everything else on 53 falls through to the REJECT below.
@@ -440,11 +491,11 @@ apply_firewall() {
         resolvers="$(dns_resolvers)"
         while IFS= read -r ns; do
             [ -n "$ns" ] || continue
-            if iptables -A DEVCONTAINER_EGRESS -p udp --dport 53 -d "$ns" -j ACCEPT 2>/dev/null &&
-               iptables -A DEVCONTAINER_EGRESS -p tcp --dport 53 -d "$ns" -j ACCEPT 2>/dev/null; then
+            if add_rule "dns" -p udp --dport 53 -d "$ns" -j ACCEPT &&
+               add_rule "dns" -p tcp --dport 53 -d "$ns" -j ACCEPT; then
                 pinned="${pinned:+$pinned }$ns"
             else
-                warn "iptables refused a DNS rule for $ns; queries to it will be blocked"
+                warn "  queries to $ns will be blocked"
             fi
         done <<< "$resolvers"
         if [ -z "$pinned" ]; then
@@ -456,25 +507,50 @@ apply_firewall() {
     # Above the DNS rules in effect, not in order: the proxy resolves server-side for the hosts it
     # is allowed to reach, and restricting it too would break allowDns=false, where resolving on
     # the container's behalf is the entire point.
-    iptables -A DEVCONTAINER_EGRESS -m owner --uid-owner "$uid" -j ACCEPT
-    iptables -A DEVCONTAINER_EGRESS -j REJECT --reject-with icmp-port-unreachable
+    #
+    # This rule and the REJECT under it are the firewall. Either one missing is a container nobody
+    # should work in -- the first blocks the proxy along with everything else, the second leaves
+    # egress open -- so the chain comes down rather than being left in that shape.
+    add_rule "proxy-uid" -m owner --uid-owner "$uid" -j ACCEPT || {
+        flush_firewall "the kernel has no xt_owner module, so the proxy cannot be let out"
+        return 1; }
+    add_rule "default-deny" -j REJECT --reject-with icmp-port-unreachable || {
+        flush_firewall "the kernel has no ipt_REJECT target, so there is no default deny"
+        return 1; }
 
-    iptables -A OUTPUT -j DEVCONTAINER_EGRESS
+    if ! iptables -A OUTPUT -j DEVCONTAINER_EGRESS 2>/dev/null ||
+       ! iptables -C OUTPUT -j DEVCONTAINER_EGRESS 2>/dev/null; then
+        # The chain built cleanly and then was not attached to anything. Verified rather than
+        # assumed: an unattached chain filters nothing, and every earlier line of output says the
+        # rules went in, which is exactly the report that gets believed.
+        warn "the chain was built but could not be attached to OUTPUT; egress is unrestricted."
+        module_hint
+        flush_firewall "the chain could not be attached to OUTPUT"
+        return 1
+    fi
     # Line 1 is the marker, line 2 the resolvers that were actually pinned, line 3 the local
     # subnets that were opened. Separate lines because status has to answer all three questions and
     # cannot query iptables without root.
-    { echo applied; echo "$pinned"; echo "$nets"; } > "$STATE_FILE" 2>/dev/null
+    { echo applied; echo "$pinned"; echo "$nets"; echo; } > "$STATE_FILE" 2>/dev/null
     chmod 0644 "$STATE_FILE" 2>/dev/null
     log "firewall applied: default deny, out via uid $uid only, dns=${pinned:-none}," \
         "local=${nets:-none}"
 }
 
+# Takes an optional reason, which becomes line 4 of the state file. `status` runs as the remote
+# user and cannot query iptables, so without it the only thing an unprivileged reader learns from a
+# failed firewall is that it failed.
 flush_firewall() {
     iptables -D OUTPUT -j DEVCONTAINER_EGRESS 2>/dev/null
     iptables -F DEVCONTAINER_EGRESS 2>/dev/null
     iptables -X DEVCONTAINER_EGRESS 2>/dev/null
-    { echo absent; echo; echo; } > "$STATE_FILE" 2>/dev/null
-    log "firewall removed"
+    { echo absent; echo; echo; echo "${1:-}"; } > "$STATE_FILE" 2>/dev/null
+    chmod 0644 "$STATE_FILE" 2>/dev/null
+    if [ -n "${1:-}" ]; then
+        log "firewall removed: $1"
+    else
+        log "firewall removed"
+    fi
 }
 
 # Advisory, and labelled as such. Tools that honour it get working networking without being told;
@@ -531,6 +607,13 @@ status() {
         printf '  %-14s default deny, dns=%s\n' "firewall" "$ALLOW_DNS"
     else
         printf '  %-14s NOT APPLIED -- egress is unrestricted\n' "firewall"
+        # Line 4 of the state file, written by flush_firewall. Without it the only thing an
+        # unprivileged reader learns is that the firewall is not there, which is the half of the
+        # answer they already had.
+        local why
+        why="$(sed -n 4p "$STATE_FILE" 2>/dev/null)"
+        [ -n "$why" ] && printf '  %-14s %s\n' "" "$why"
+        [ -n "$why" ] && printf '  %-14s see the log: %s\n' "" "/var/log/devcontainer/egress-filter.log"
     fi
 
     # What port 53 may be opened to, which is a separate question from whether DNS is on at all.

@@ -98,4 +98,34 @@ check "the chain lets exactly one uid out" bash -c '
     [ "$(echo "$rules" | grep -c -- "--uid-owner")" = 1 ] || { echo "another uid is exempt too"; exit 1; }
     echo "$rules" | tail -1 | grep -q -- "-j REJECT" || { echo "the chain does not end in REJECT"; exit 1; }'
 
+# The failure path, which is the one that rots unnoticed: a kernel with no xt_owner, which is what a
+# rootless runtime on an unprepared host gives you. Proven with a stub `iptables` first on PATH, so
+# the real chain is never touched -- every call the script makes, including its own cleanup, lands
+# on the stub. The state file is the one thing that really is rewritten, so it is put back after.
+#
+# What must hold: the chain comes down rather than being left without its owner rule (which would
+# block the proxy too) or without its REJECT (which would filter nothing while reporting that it
+# does), and the reason reaches the unprivileged reader.
+check "a refused match brings the chain down instead of half-applying it" bash -c '
+    stub=$(mktemp -d)
+    cat > "$stub/iptables" <<"STUB"
+#!/bin/sh
+case "$*" in *--uid-owner*) exit 1 ;; esac
+exit 0
+STUB
+    chmod +x "$stub/iptables"
+    out=$(PATH="$stub:$PATH" /usr/local/share/devcontainer/egress-filter/egress.sh firewall 2>&1)
+    rc=$?
+    echo "$out" | sed "s/^/  /"
+    # Put the real state file back before any assertion can leave the container misreported.
+    /usr/local/share/devcontainer/egress-filter/egress.sh firewall >/dev/null 2>&1
+    [ "$rc" != 0 ] || { echo "a missing xt_owner was reported as success"; exit 1; }
+    echo "$out" | grep -q "xt_owner" || { echo "the failure did not name the module"; exit 1; }
+    echo "$out" | grep -q "firewall removed" || { echo "the chain was left half-applied"; exit 1; }
+    echo "$out" | grep -qi "rootless" || { echo "the hint does not mention a rootless runtime"; exit 1; }'
+
+check "the firewall is back up, and reported, after that test" bash -c '
+    iptables -C OUTPUT -j DEVCONTAINER_EGRESS || { echo "the chain was not restored"; exit 1; }
+    egress-status | tee /dev/stderr | grep -q "default deny"'
+
 reportResults
