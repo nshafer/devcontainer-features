@@ -1,8 +1,8 @@
 {
   "id": "sandbox",
-  "version": "1.4.0",
+  "version": "2.0.0",
   "name": "Sandbox (nshafer)",
-  "description": "Seals the host sockets VS Code forwards into a dev container - SSH agent, GPG agent, X11 and the VS Code IPC channels - and takes away the remote user's blanket sudo grant so the seals cannot simply be undone. Mitigation, not a boundary: the socket must exist for the container to attach, so there is a short window at each attach. See the README.",
+  "description": "Seals the host sockets VS Code forwards into a dev container - SSH agent, GPG agent, X11 and the Dev Containers extension IPC - and takes away the remote user's blanket sudo grant so the seals cannot simply be undone. Mitigation, not a boundary: the socket must exist for the container to attach, so there is a short window at each attach. See the README.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/sandbox",
   "options": {
     "blockSshAgent": {
@@ -20,15 +20,25 @@
       "default": true,
       "description": "Block the forwarded display (/tmp/.X11-unix/X*). The socket is sealed just after VS Code creates it, not pre-empted -- pre-empting it stops the container attaching at all. GUI apps stop reaching your desktop. Wayland cannot be blocked from inside - see the README."
     },
-    "blockVscodeIpc": {
+    "blockCodeCli": {
+      "type": "boolean",
+      "default": false,
+      "description": "Block the 'code' CLI channel (vscode-ipc-*.sock). Off by default because sealing it stops the container attaching: the VS Code server unlinks that path when it disposes the hook, a root-owned tombstone makes that throw EPERM, and the window sits on 'Configuring Dev Container' for good. What it grants while open: driving the editor, and opening any URI with your host desktop's handler ('code --open-external'). Turn it on only if you accept the attach failure."
+    },
+    "blockGitAskpass": {
+      "type": "boolean",
+      "default": false,
+      "description": "Block the git credential channel (vscode-git-*.sock, reached through GIT_ASKPASS). Off by default because blocking it stops git push, pull and fetch over HTTPS, in the VS Code UI and in the terminal. What it grants while open: the host's GitHub token, to anything in the container that connects to the socket. Turn it on if no host credential should be reachable, and authenticate some other way."
+    },
+    "blockExtensionIpc": {
       "type": "boolean",
       "default": true,
-      "description": "Block the VS Code IPC channels: vscode-ipc-* (the 'code' CLI), vscode-git-* (the git credential helper, which hands out the host's GitHub token) and vscode-remote-containers-ipc-* (the extension's own channel). Breaks 'code .' from the terminal and VS Code's git authentication."
+      "description": "Block the Dev Containers extension channel (vscode-remote-containers-ipc-*.sock). An HTTP POST on it calls rpc on the extension running on your host, and git uses it as credential.helper - so it answers for every host in your host's credential store, with no prompt. Blocking it costs the host credential helper and host docker registry logins. Push and pull still work through blockGitAskpass."
     },
     "scrubEnv": {
       "type": "boolean",
       "default": true,
-      "description": "Also unset the variables that advertise these sockets (SSH_AUTH_SOCK, DISPLAY, GIT_ASKPASS, BROWSER, VSCODE_IPC_HOOK_CLI, REMOTE_CONTAINERS_*) in every shell. Cosmetic next to the socket blocks - VS Code re-injects them - but it stops tools finding the paths by accident."
+      "description": "Also unset the variables that advertise the blocked sockets (SSH_AUTH_SOCK, DISPLAY, GIT_ASKPASS, BROWSER, VSCODE_IPC_HOOK_CLI, REMOTE_CONTAINERS_*) in every shell. Only for the channels that are actually blocked - unsetting the variable for an open channel would break it. Cosmetic next to the socket blocks, since VS Code re-injects them, but it stops tools finding the paths by accident."
     },
     "sweepInterval": {
       "type": "string",

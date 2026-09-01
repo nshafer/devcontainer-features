@@ -1,3 +1,19 @@
+## Upgrading from 1.x
+
+`blockVscodeIpc` is gone. It covered three sockets that are not equivalent, and one of those
+sockets cannot be sealed without stopping the container from attaching. Three options replace it:
+
+| Was | Is now | Default |
+| --- | --- | --- |
+| `blockVscodeIpc` → `vscode-ipc-*.sock` | `blockCodeCli` | `false` |
+| `blockVscodeIpc` → `vscode-git-*.sock` | `blockGitAskpass` | `false` |
+| `blockVscodeIpc` → `vscode-remote-containers-ipc-*.sock` | `blockExtensionIpc` | `true` |
+
+The CLI warns about an option it does not know, so a `devcontainer.json` that still sets
+`blockVscodeIpc` builds and gets the new defaults. To keep 1.x behaviour exactly, set all three to
+`true` — and read the section on `vscode-ipc-*.sock` below first, because that is the setting that
+hangs the attach.
+
 ## Host setup
 
 None on the filesystem. This feature mounts nothing from the host, so you create no path before the
@@ -28,18 +44,74 @@ VS Code's Dev Containers extension forwards a set of host sockets into every con
 Each socket is a capability that an agent in the container inherits. This is measured from a live
 container, not assumed. The extension writes the list into `REMOTE_CONTAINERS_SOCKETS` itself:
 
-| Channel | Path | What it grants |
-| --- | --- | --- |
-| SSH agent | `/tmp/vscode-ssh-auth-<uuid>.sock` | signing with your host SSH keys |
-| GPG agent | `~/.gnupg/S.gpg-agent` | signing with your host GPG keys |
-| X11 | `/tmp/.X11-unix/X<n>` | your desktop: keystrokes, screenshots |
-| GPG keyboxd | `~/.gnupg/S.keyboxd` | your keyring |
-| git credentials | `$XDG_RUNTIME_DIR/vscode-git-<id>.sock` | your GitHub token, via `GIT_ASKPASS` |
-| `code` CLI | `vscode-ipc-<uuid>.sock` | driving your editor |
-| extension IPC | `vscode-remote-containers-ipc-<uuid>.sock` | the extension's own channel to the host |
-| Wayland | `/tmp/vscode-wayland-<uuid>.sock` | your desktop — **a bind mount**, see below |
+| Channel | Path | Option | Default | What it grants |
+| --- | --- | --- | --- | --- |
+| SSH agent | `/tmp/vscode-ssh-auth-<uuid>.sock` | `blockSshAgent` | blocked | signing with your host SSH keys |
+| GPG agent | `~/.gnupg/S.gpg-agent` | `blockGpgAgent` | blocked | signing with your host GPG keys |
+| GPG keyboxd | `~/.gnupg/S.keyboxd` | `blockGpgAgent` | blocked | your keyring |
+| X11 | `/tmp/.X11-unix/X<n>` | `blockX11` | blocked | your desktop: keystrokes, screenshots |
+| extension IPC | `vscode-remote-containers-ipc-<uuid>.sock` | `blockExtensionIpc` | blocked | RPC to the extension on your host, including every credential your host stores |
+| git credentials | `$XDG_RUNTIME_DIR/vscode-git-<id>.sock` | `blockGitAskpass` | **open** | your GitHub token, via `GIT_ASKPASS` |
+| `code` CLI | `vscode-ipc-<uuid>.sock` | `blockCodeCli` | **open** | driving your editor, and opening a URI on your host desktop |
+| Wayland | `/tmp/vscode-wayland-<uuid>.sock` | none | open | your desktop — **a bind mount**, see below |
 
-This feature seals those sockets and removes the remote user's sudo grant, so the seals hold.
+This feature seals those sockets and removes the remote user's sudo grant, so the seals hold. Two
+of them ship open, and the next two sections say why, because in both cases the reason is about
+what VS Code needs rather than about what the channel costs you.
+
+### The three IPC channels are not one channel
+
+They used to share an option, `blockVscodeIpc`. They are not equivalent. Measured from the
+container server's own source, `/tmp/vscode-remote-containers-server-<uuid>.js`, and from the
+server CLI in `~/.vscode-server/bin/<commit>/out/server-cli.js`:
+
+| Socket | Reaches the host? | What it grants | What blocking it breaks |
+| --- | --- | --- | --- |
+| `vscode-ipc-*.sock` | through the editor UI | four message types — `open`, `status`, `extensionManagement`, and `openExternal`, which opens any URI with your **host** desktop's handler | `code .`, `code --wait` as `core.editor`, **and the attach itself** |
+| `vscode-git-*.sock` | yes, through the git extension | your host's GitHub token, for a host name the caller picks. VS Code prompts only for a host it has no session for | `git push`, `pull` and `fetch` over HTTPS, in the UI and in the terminal |
+| `vscode-remote-containers-ipc-*.sock` | yes, directly | an HTTP `POST` on it calls `rpc` on the extension **on your host**. Git uses it as `credential.helper`, so it answers for every host in your host's credential store, with no prompt | the host credential helper, and host docker registry logins |
+
+`blockExtensionIpc` is on by default because it is the broadest of the three, and because the
+narrower credential channel covers push and pull on its own. If you want no host credential
+reachable at all, set `blockGitAskpass` to `true` as well and authenticate some other way.
+
+### Why `vscode-ipc-*.sock` ships open
+
+It is not only the `code` CLI. The VS Code server registers its own channels on one of those
+paths, and it deletes the file when it disposes the hook — with nothing around the call:
+
+```js
+dispose() { ...; this._ipcHandlePath && existsSync(this._ipcHandlePath) && unlinkSync(this._ipcHandlePath) }
+```
+
+A tombstone is root-owned and `/tmp` is sticky, so that `unlinkSync` cannot succeed. It throws,
+and the throw surfaces in `~/.vscode-server/data/logs/*/remoteagent.log` as:
+
+```
+[error] Error: EPERM: operation not permitted, unlink '/tmp/vscode-ipc-<uuid>.sock'
+    at Module.unlinkSync ... at Eh.dispose ...
+```
+
+The window then sits on "Configuring Dev Container" for good, with an empty log. This is the same
+shape of failure as the 1.0.0 directory bug below, and it has the same root cause: a tombstone is
+permanent by design, so it cannot coexist with a component that unlinks and rebinds its own path.
+Nothing inside the container can fix it. `blockCodeCli` is there for anyone who accepts the cost.
+
+### Two paths ask for a credential, not one
+
+`git push` over HTTPS fails through both of them when both are sealed, and the log names each one:
+
+```
+> git push origin main:main
+Unable to connect to VS Code Dev Containers extension.
+Error in request Error: connect EACCES /tmp/vscode-remote-containers-ipc-<uuid>.sock
+Missing or invalid credentials.
+Error: connect EACCES /tmp/vscode-git-<id>.sock
+```
+
+The first line is `credential.helper`, which VS Code writes into `/etc/gitconfig`. The second is
+`GIT_ASKPASS`. Either one alone is enough to authenticate a push, so the defaults open the
+narrower one and keep the broader one shut.
 
 ## What this actually buys you — read this first
 
@@ -135,9 +207,10 @@ Every mutation in the feature is gated on a `/proc/self/mountinfo` check for exa
 and `test/sandbox/wayland_bind_mount.sh` shows the write-through happening and then proves the guard
 stops it. The only real fix is host-side, in the host setup above.
 
-**Depth 3, not 2.** `XDG_RUNTIME_DIR` in a dev container is `/tmp/user/<uid>`, and the git
-credential socket — the one that hands out your GitHub token — lives there. A sweep two levels deep
-looks thorough and silently leaves it open.
+**Depth 3, not 2.** `XDG_RUNTIME_DIR` in a dev container is `/tmp/user/<uid>`, and a forwarded
+socket can live there rather than directly in `/tmp` — the git credential socket, the one that
+hands out your GitHub token, is the usual example. A sweep two levels deep looks thorough and
+silently leaves it open.
 
 **The manifest is reported on, never acted on.** `REMOTE_CONTAINERS_SOCKETS` is the authoritative
 list of what was forwarded, so a channel these globs do not know about still gets surfaced. The
@@ -155,6 +228,12 @@ So a new channel gets you a warning, not silence, and not an exploit.
 `persist-homedir`: it puts `/home` on a volume that masks whatever the image wrote to `~/.bashrc`,
 so a scrub installed there works exactly once and then stops.
 
+**The scrub follows the blocks, one channel at a time.** `install.sh` generates the list at build
+time and writes one `unset` line per *blocked* channel. For an open channel the variable stays,
+because there the scrub would not be cosmetic — a terminal with no `GIT_ASKPASS` cannot
+authenticate a push however reachable the socket is, and a terminal with no `VSCODE_IPC_HOOK_CLI`
+has no working `code`.
+
 Check the result at any time. It exits non-zero if anything is still reachable:
 
 ```console
@@ -163,7 +242,9 @@ sandbox: forwarded host channels in this container
   ssh agent        blocked
   gpg agent        blocked
   x11 display      blocked
-  vscode ipc       blocked
+  code cli         not blocked (option is off)
+  git askpass      not blocked (option is off)
+  extension ipc    blocked
   sudo             dropped
   no-new-privs     not set -- add "securityOpt": ["no-new-privileges"] in devcontainer.json
   sweeper          running (inotify, 1s poll backstop)
@@ -255,7 +336,12 @@ Rejected outright:
 | --- | --- |
 | A relative path — `systemctl restart x` | The caller owns `PATH`, so the caller picks the binary. |
 | A wildcard — `systemctl reboot *` | A sudoers wildcard is a glob. It matches `/` and spans arguments, so `chmod 666 /tmp/*` permits `chmod 666 /tmp/../etc/shadow`. |
-| Shell syntax — `;` `&&` `\|` `` ` `` `$` `<` `>` quotes | `sudo` execs the command. It never runs a shell, so `/bin/foo; rm -rf /` is one entry, not two. |
+<!-- The dollar below is written as ` $ ` on purpose. generate-docs builds the README with a
+     JavaScript String.replace, and a dollar followed by a backtick is a replacement pattern
+     there: it means "everything before the match", so one plain dollar in a code span injects
+     a whole second copy of the template into this table. A code span with spaces around it
+     renders identically and puts a space after the dollar instead. -->
+| Shell syntax — `;` `&&` `\|` `` ` `` ` $ ` `<` `>` quotes | `sudo` execs the command. It never runs a shell, so `/bin/foo; rm -rf /` is one entry, not two. |
 | `!` | sudoers command negation denies a *path*. The same binary copied elsewhere is a different path. |
 | A shell or interpreter — `sh`, `bash`, `python3`, `perl`, `awk`, `node` | Runs anything as root, pinned or not. |
 | A command that runs a command — `env`, `xargs`, `find`, `timeout`, `nohup`, `watch`, `systemd-run` | Same, one step removed. |

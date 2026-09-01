@@ -1,6 +1,11 @@
 # shellcheck shell=bash
 # Sourced, never executed. Unsets the variables that advertise the forwarded sockets.
 #
+# This file is the header only. install.sh appends one `unset` line per *blocked* channel at build
+# time, so what ships is a template and what runs is generated. The list has to follow the blocks:
+# a channel this feature leaves open needs its variable, and unsetting it would break the channel
+# rather than harden it. See the scrub block in install.sh for the mapping.
+#
 # Be clear about what this is worth: it is the weakest of the three layers and it is not a control.
 # VS Code re-injects these into every process it starts, and any program that wants a path can read
 # it back out of /proc. The sockets being unusable is the control; this only stops a tool finding a
@@ -14,21 +19,3 @@
 #
 # No set -u, no exit, nothing slow: $BASH_ENV means this is sourced by every non-interactive bash
 # in the container, including the ones inside build scripts.
-
-unset SSH_AUTH_SOCK
-unset SSH_AGENT_PID
-unset GPG_AGENT_INFO
-unset DISPLAY
-unset XAUTHORITY
-unset WAYLAND_DISPLAY
-unset VSCODE_IPC_HOOK_CLI
-unset VSCODE_GIT_IPC_HANDLE
-unset VSCODE_GIT_ASKPASS_MAIN
-unset VSCODE_GIT_ASKPASS_NODE
-unset VSCODE_GIT_ASKPASS_EXTRA_ARGS
-unset GIT_ASKPASS
-unset SSH_ASKPASS
-unset BROWSER
-unset REMOTE_CONTAINERS_IPC
-unset REMOTE_CONTAINERS_SOCKETS
-unset REMOTE_CONTAINERS_DISPLAY_SOCK

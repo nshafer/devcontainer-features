@@ -28,7 +28,9 @@ CONFIG=/usr/local/share/devcontainer/sandbox/config
 BLOCK_SSH=true
 BLOCK_GPG=true
 BLOCK_X11=true
-BLOCK_IPC=true
+BLOCK_CODE_CLI=false
+BLOCK_GIT_ASKPASS=false
+BLOCK_EXT_IPC=true
 SWEEP_INTERVAL=1
 SUDO_MODE=drop
 SUDO_ALLOW_UNSAFE=false
@@ -613,11 +615,11 @@ block_fixed() {
 sweep_globs() {
     local -a names=()
     [ "$BLOCK_SSH" = true ] && names+=(-o -name 'vscode-ssh-auth-*.sock')
-    if [ "$BLOCK_IPC" = true ]; then
-        names+=(-o -name 'vscode-ipc-*.sock')
-        names+=(-o -name 'vscode-git-*.sock')
-        names+=(-o -name 'vscode-remote-containers-ipc-*.sock')
-    fi
+    # One option per channel, because the three are not equivalent and one of them cannot be sealed
+    # at all. See path_blocked below, and the channel table in the README.
+    [ "$BLOCK_CODE_CLI" = true ] && names+=(-o -name 'vscode-ipc-*.sock')
+    [ "$BLOCK_GIT_ASKPASS" = true ] && names+=(-o -name 'vscode-git-*.sock')
+    [ "$BLOCK_EXT_IPC" = true ] && names+=(-o -name 'vscode-remote-containers-ipc-*.sock')
 
     if [ ${#names[@]} -gt 0 ]; then
         # ${names[@]:1} drops the leading -o. ROOTS is a deliberate word-split list of directories.
@@ -676,6 +678,24 @@ sweep() {
 # variables out of their shells before they get to call this -- and having scrubbed them, they
 # exec this without them. They pass their own $$ instead, whose procfs copy is still intact.
 # Same user, so no capability is needed to read it.
+#
+# Which option governs a forwarded path. Every channel has its own option now, and two of them are
+# off by default, so a path whose block is switched off has to be skipped here. Without this, every
+# attach warns about a socket the configuration deliberately leaves open -- and a warning that is
+# always there is one nobody reads. An unrecognised path counts as one that should be sealed, so a
+# channel none of the globs know about is still surfaced.
+path_blocked() {
+    case "${1##*/}" in
+        vscode-ipc-*.sock)                   [ "$BLOCK_CODE_CLI" = true ] ;;
+        vscode-git-*.sock)                   [ "$BLOCK_GIT_ASKPASS" = true ] ;;
+        vscode-remote-containers-ipc-*.sock) [ "$BLOCK_EXT_IPC" = true ] ;;
+        vscode-ssh-auth-*.sock)              [ "$BLOCK_SSH" = true ] ;;
+        S.gpg-agent* | S.keyboxd)            [ "$BLOCK_GPG" = true ] ;;
+        X[0-9]*)                             [ "$BLOCK_X11" = true ] ;;
+        *)                                   true ;;
+    esac
+}
+
 check_manifest() {
     local pid="${1:-$$}" declared unsealed=0
 
@@ -692,6 +712,7 @@ check_manifest() {
         [ -n "$path" ] || continue
         [ -e "$path" ] || continue
         is_mount "$path" && continue
+        path_blocked "$path" || continue
         if [ "$(stat -c %u "$path" 2>/dev/null)" = "0" ] && [ "$(stat -c %a "$path" 2>/dev/null)" = "0" ]; then
             continue
         fi
@@ -748,10 +769,14 @@ status() {
     channel "gpg agent" "$BLOCK_GPG" "$GNUPG_DIR/S.gpg-agent"
     channel "x11 display" "$BLOCK_X11" "$X11_DIR"/X*
     # shellcheck disable=SC2046,SC2086
-    channel "vscode ipc" "$BLOCK_IPC" \
-        $(find $ROOTS -maxdepth 3 -type s \
-            \( -name 'vscode-ipc-*.sock' -o -name 'vscode-git-*.sock' \
-               -o -name 'vscode-remote-containers-ipc-*.sock' \) 2>/dev/null)
+    channel "code cli" "$BLOCK_CODE_CLI" \
+        $(find $ROOTS -maxdepth 3 -type s -name 'vscode-ipc-*.sock' 2>/dev/null)
+    # shellcheck disable=SC2046,SC2086
+    channel "git askpass" "$BLOCK_GIT_ASKPASS" \
+        $(find $ROOTS -maxdepth 3 -type s -name 'vscode-git-*.sock' 2>/dev/null)
+    # shellcheck disable=SC2046,SC2086
+    channel "extension ipc" "$BLOCK_EXT_IPC" \
+        $(find $ROOTS -maxdepth 3 -type s -name 'vscode-remote-containers-ipc-*.sock' 2>/dev/null)
 
     # Reported rather than acted on: it is a bind mount, and the only lever for it is on the host.
     local wayland

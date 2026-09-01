@@ -14,9 +14,22 @@
         "blockSshAgent": false,
         "blockGpgAgent": false,
         "blockX11": false,
-        "blockVscodeIpc": false,
+        "blockCodeCli": false,
+        "blockGitAskpass": false,
+        "blockExtensionIpc": false,
         "scrubEnv": false,
         "sweepInterval": "5"
+      }
+    }
+  },
+  "ipc_all_on": {
+    "image": "mcr.microsoft.com/devcontainers/base:debian",
+    "remoteUser": "root",
+    "features": {
+      "sandbox": {
+        "blockCodeCli": true,
+        "blockGitAskpass": true,
+        "blockExtensionIpc": true
       }
     }
   },

@@ -25,7 +25,11 @@ check "defaults were baked in" bash -c '
     [ "$BLOCK_SSH" = true ] || { echo "ssh: $BLOCK_SSH"; exit 1; }
     [ "$BLOCK_GPG" = true ] || { echo "gpg: $BLOCK_GPG"; exit 1; }
     [ "$BLOCK_X11" = true ] || { echo "x11: $BLOCK_X11"; exit 1; }
-    [ "$BLOCK_IPC" = true ] || { echo "ipc: $BLOCK_IPC"; exit 1; }
+    [ "$BLOCK_EXT_IPC" = true ] || { echo "extensionIpc: $BLOCK_EXT_IPC"; exit 1; }
+    # The two that ship off. Asserted as false rather than left out, because turning either one on
+    # by default is the change that breaks the attach or breaks git push.
+    [ "$BLOCK_CODE_CLI" = false ] || { echo "codeCli: $BLOCK_CODE_CLI"; exit 1; }
+    [ "$BLOCK_GIT_ASKPASS" = false ] || { echo "gitAskpass: $BLOCK_GIT_ASKPASS"; exit 1; }
     [ "$USERNAME" = "$(whoami)" ] || { echo "user: $USERNAME vs $(whoami)"; exit 1; }'
 
 # ---------------------------------------------------------------------------------------------
@@ -118,23 +122,56 @@ check "nothing can bind the path again" bash -c '
     echo "$out" | grep -qi "address already in use\|permission denied"'
 
 # ---------------------------------------------------------------------------------------------
-# The depth bug in the approach this is drawn from. XDG_RUNTIME_DIR is /tmp/user/<uid>, so the git
-# credential socket -- the one that hands out the host's GitHub token -- sits at depth 3, and a
-# -maxdepth 2 sweep misses it while looking thorough.
+# The depth bug in the approach this is drawn from. XDG_RUNTIME_DIR is /tmp/user/<uid>, so a
+# forwarded socket can sit at depth 3, and a -maxdepth 2 sweep misses it while looking thorough.
 # ---------------------------------------------------------------------------------------------
 
 check "sockets at XDG_RUNTIME_DIR depth are swept" bash -c '
     mkdir -p /tmp/user/1000
-    sock-bind /tmp/user/1000/vscode-git-abc123.sock
-    sock-bind /tmp/user/1000/vscode-ipc-deep.sock
-    for s in /tmp/user/1000/vscode-git-abc123.sock /tmp/user/1000/vscode-ipc-deep.sock; do
-        wait-sealed "$s" || { echo "$s not sealed -- depth 3 was missed"; exit 1; }
-        ls -l "$s"
-    done'
+    sock-bind /tmp/user/1000/vscode-remote-containers-ipc-deep.sock
+    wait-sealed /tmp/user/1000/vscode-remote-containers-ipc-deep.sock \
+        || { echo "not sealed -- depth 3 was missed"; exit 1; }
+    ls -l /tmp/user/1000/vscode-remote-containers-ipc-deep.sock'
 
 check "the remote-containers ipc socket is swept" bash -c '
     sock-bind /tmp/vscode-remote-containers-ipc-x.sock
     wait-sealed /tmp/vscode-remote-containers-ipc-x.sock || { echo "not sealed"; exit 1; }'
+
+# ---------------------------------------------------------------------------------------------
+# The two channels that ship open, and why each one does.
+#
+# vscode-ipc-*.sock is not only the `code` CLI. The VS Code server registers its own channels on
+# one of those paths and unlinks the file when it disposes the hook -- with no try around it. A
+# root-owned tombstone in sticky /tmp turns that into
+#
+#   [error] Error: EPERM: operation not permitted, unlink '/tmp/vscode-ipc-<uuid>.sock'
+#       at Module.unlinkSync ... at Eh.dispose ...
+#
+# and the window then sits on "Configuring Dev Container" for good. So the check is not that the
+# socket is sealed. It is that the remote user can still create one AND remove it again, which is
+# exactly what the server has to be able to do.
+#
+# vscode-git-*.sock is the GIT_ASKPASS channel. Sealed, git push and pull fail in the VS Code UI
+# with "Missing or invalid credentials".
+# ---------------------------------------------------------------------------------------------
+
+check "a vscode-ipc socket is left alone, so the window can finish attaching" bash -c '
+    sock-bind /tmp/vscode-ipc-default.sock
+    sleep 3
+    mode=$(stat -c %a /tmp/vscode-ipc-default.sock); echo "  mode $mode"
+    [ "$mode" != 0 ] || { echo "sealed despite blockCodeCli=false"; exit 1; }
+    rm -f /tmp/vscode-ipc-default.sock \
+        || { echo "the remote user could not remove its own socket"; exit 1; }
+    echo "  created and removed by $(whoami), which is what VS Code does"'
+
+check "a git askpass socket is left alone, so git push works" bash -c '
+    sock-bind /tmp/vscode-git-default.sock
+    sleep 3
+    mode=$(stat -c %a /tmp/vscode-git-default.sock); echo "  mode $mode"
+    [ "$mode" != 0 ] || { echo "sealed despite blockGitAskpass=false"; exit 1; }
+    [ "$(stat -c %U /tmp/vscode-git-default.sock)" = "$(whoami)" ] \
+        || { echo "taken by root despite blockGitAskpass=false"; exit 1; }
+    echo "  left reachable, as configured"'
 
 # ---------------------------------------------------------------------------------------------
 # The forwarding manifest. VS Code declares what it forwarded in REMOTE_CONTAINERS_SOCKETS, so a
@@ -147,6 +184,16 @@ check "check-manifest passes when the declared channels are sealed" bash -c '
     out=$(REMOTE_CONTAINERS_SOCKETS='"'"'["/tmp/vscode-ssh-auth-test-uuid.sock"]'"'"' \
         /usr/local/share/devcontainer/sandbox/sandbox.sh check-manifest 2>&1)
     echo "$out"
+    echo "$out" | grep -q "every channel VS Code declared is sealed"'
+
+# A path whose own option is off is not a finding. Without this, every attach warns about a socket
+# the configuration leaves open on purpose, and a warning that is always there is one nobody reads.
+check "check-manifest stays quiet about a channel whose option is off" bash -c '
+    sock-bind /tmp/vscode-git-declared.sock
+    sleep 2
+    out=$(REMOTE_CONTAINERS_SOCKETS='"'"'["/tmp/vscode-git-declared.sock"]'"'"' \
+        /usr/local/share/devcontainer/sandbox/sandbox.sh check-manifest 2>&1) \
+        || { echo "warned about a channel blockGitAskpass=false leaves open:"; echo "$out"; exit 1; }
     echo "$out" | grep -q "every channel VS Code declared is sealed"'
 
 check "check-manifest reports a declared channel the globs do not cover" bash -c '
@@ -217,12 +264,14 @@ check "a new socket is sealed in milliseconds, not on the next poll" bash -c '
     # The poll backstop is 1000ms, so anything well under that proves inotify drove it.
     [ "$ms" -lt 500 ] || { echo "took ${ms}ms -- that is the poll, not inotify"; exit 1; }'
 
-check "sandbox-status says every channel is blocked" bash -c '
+check "sandbox-status reports each channel as configured" bash -c '
     sandbox-status | tee /dev/stderr
     sandbox-status | grep -qE "ssh agent +blocked"
     sandbox-status | grep -qE "gpg agent +blocked"
     sandbox-status | grep -qE "x11 display +blocked"
-    sandbox-status | grep -qE "vscode ipc +blocked"
+    sandbox-status | grep -qE "extension ipc +blocked"
+    sandbox-status | grep -qE "code cli +not blocked \(option is off\)"
+    sandbox-status | grep -qE "git askpass +not blocked \(option is off\)"
     sandbox-status | grep -qE "sudo +dropped"'
 
 # ---------------------------------------------------------------------------------------------
@@ -238,10 +287,19 @@ check "the scrub is wired into /etc, never \$HOME" bash -c '
     # there would work exactly once and then quietly stop on the next rebuild.
     ! grep -q devcontainer/sandbox "$HOME/.bashrc" 2>/dev/null'
 
-check "an interactive bash has the socket variables scrubbed" bash -c '
-    out=$(SSH_AUTH_SOCK=/tmp/x.sock GIT_ASKPASS=/tmp/a.sh VSCODE_IPC_HOOK_CLI=/tmp/i.sock \
-        bash -ic "echo ssh=[\$SSH_AUTH_SOCK] askpass=[\$GIT_ASKPASS] ipc=[\$VSCODE_IPC_HOOK_CLI]" 2>/dev/null)
-    echo "$out" | grep -q "ssh=\[\] askpass=\[\] ipc=\[\]"'
+check "an interactive bash has the blocked channels scrubbed" bash -c '
+    out=$(SSH_AUTH_SOCK=/tmp/x.sock DISPLAY=:9 REMOTE_CONTAINERS_IPC=/tmp/e.sock \
+        bash -ic "echo ssh=[\$SSH_AUTH_SOCK] display=[\$DISPLAY] ext=[\$REMOTE_CONTAINERS_IPC]" 2>/dev/null)
+    echo "$out" | grep -q "ssh=\[\] display=\[\] ext=\[\]"'
+
+# The other half of the same rule, and the one that used to be wrong. Unsetting the variable for a
+# channel this feature leaves open does not harden anything -- it breaks it. A terminal with no
+# GIT_ASKPASS cannot authenticate a push however reachable the socket is.
+check "an open channel keeps the variable that makes it work" bash -c '
+    out=$(GIT_ASKPASS=/tmp/a.sh VSCODE_IPC_HOOK_CLI=/tmp/i.sock \
+        bash -ic "echo askpass=[\$GIT_ASKPASS] ipc=[\$VSCODE_IPC_HOOK_CLI]" 2>/dev/null)
+    echo "$out"
+    echo "$out" | grep -q "askpass=\[/tmp/a.sh\] ipc=\[/tmp/i.sock\]"'
 
 check "a login shell has them scrubbed" bash -c '
     out=$(SSH_AUTH_SOCK=/tmp/x.sock bash -lc "echo ssh=[\$SSH_AUTH_SOCK]" 2>/dev/null)

@@ -12,7 +12,7 @@ link:
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | [`persist-homedir`](src/persist-homedir) | Keeps `/home` on a per-project named volume across rebuilds, minus the VS Code server/extensions. |
 | [`git-config`](src/git-config)           | Copies the host's git config and excludes file into the container.                                |
-| [`sandbox`](src/sandbox)                 | Seals the host sockets VS Code forwards in — SSH agent, GPG agent, X11, VS Code IPC.               |
+| [`sandbox`](src/sandbox)                 | Seals the host sockets VS Code forwards in — SSH agent, GPG agent, X11, extension IPC.             |
 | [`egress-filter`](src/egress-filter)     | Default-deny outbound networking with a hostname allowlist, enforced in-container.                 |
 | [`claude`](src/claude)                   | Installs the Claude Code CLI at build time.                                                        |
 | [`tidewave`](src/tidewave)               | Installs the Tidewave CLI and starts it on every container start.                                 |
@@ -36,7 +36,7 @@ everywhere. The standalone `devcontainer` CLI reads the config and nothing else,
     "ghcr.io/nshafer/devcontainer-features/claude:1": {},
     "ghcr.io/nshafer/devcontainer-features/git-config:1": {},
     "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {},
-    "ghcr.io/nshafer/devcontainer-features/sandbox:1": {},
+    "ghcr.io/nshafer/devcontainer-features/sandbox:2": {},
     "ghcr.io/nshafer/devcontainer-features/egress-filter:1": {},
   }
 }
@@ -110,7 +110,7 @@ are allowed, as in any `devcontainer.json`:
 
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2": { "username": "devc" },
-    "ghcr.io/nshafer/devcontainer-features/sandbox:1": {},
+    "ghcr.io/nshafer/devcontainer-features/sandbox:2": {},
     "ghcr.io/nshafer/devcontainer-features/claude:1": {},
     "ghcr.io/nshafer/devcontainer-features/git-config:1": {},
     "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {}
