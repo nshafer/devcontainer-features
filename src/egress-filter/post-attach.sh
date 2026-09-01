@@ -10,10 +10,12 @@ SHARE_DIR=/usr/local/share/devcontainer/egress-filter
 "$SHARE_DIR/egress.sh" status || true
 echo
 echo "==> egress-filter: to allow a host:"
-echo "      - add a preset to the feature's devcontainer-feature.json (container restart required)"
-echo "      - global list at ~/.config/egress-filter/allowlist.txt on host (applies immediately)"
-echo "      - project list: .devcontainer/egress-allow.txt in the repo (container restart required)"
+echo "      - Add a preset to the feature's devcontainer-feature.json (container restart required)"
+echo "      - Global list at ~/.config/egress-filter/allowlist.txt on host (applies immediately)"
+echo "      - Project list: .devcontainer/egress-allow.txt in the repo (container restart required)"
 echo
-echo "==> egress-filter: list of blocked requests and counts is available with 'egress-denied' in the container"
+echo "==> egress-filter: to view denied requests:"
+echo "      - List of blocked requests and counts is available with 'egress-denied' in the container"
+echo "      - Log of proxy requests is available at /var/log/devcontainer/egress-filter-proxy.log"
 echo
 exit 0
