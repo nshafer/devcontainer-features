@@ -1,7 +1,6 @@
-
 # Sandbox (nshafer) (sandbox)
 
-Seals the host sockets VS Code forwards into a dev container - SSH agent, GPG agent, X11 and the VS Code IPC channels - and removes the remote user's sudo grant so the seals cannot simply be undone. Mitigation, not a boundary: the socket must exist for the container to attach, so there is a short window at each attach. See the README.
+Seals the host sockets VS Code forwards into a dev container - SSH agent, GPG agent, X11 and the VS Code IPC channels - and takes away the remote user's blanket sudo grant so the seals cannot simply be undone. Mitigation, not a boundary: the socket must exist for the container to attach, so there is a short window at each attach. See the README.
 
 ## Example Usage
 
@@ -21,7 +20,9 @@ Seals the host sockets VS Code forwards into a dev container - SSH agent, GPG ag
 | blockVscodeIpc | Block the VS Code IPC channels: vscode-ipc-* (the 'code' CLI), vscode-git-* (the git credential helper, which hands out the host's GitHub token) and vscode-remote-containers-ipc-* (the extension's own channel). Breaks 'code .' from the terminal and VS Code's git authentication. | boolean | true |
 | scrubEnv | Also unset the variables that advertise these sockets (SSH_AUTH_SOCK, DISPLAY, GIT_ASKPASS, BROWSER, VSCODE_IPC_HOOK_CLI, REMOTE_CONTAINERS_*) in every shell. Cosmetic next to the socket blocks - VS Code re-injects them - but it stops tools finding the paths by accident. | boolean | true |
 | sweepInterval | Seconds between backstop sweeps. Sealing is normally driven by inotify, within about a millisecond of a socket appearing; this poll only catches what inotify missed, so it rarely needs changing. | string | 1 |
-
+| sudoMode | What happens to the remote user's sudo grant. 'drop' removes it and everything that could restore it - the default, and the only mode where every seal in this feature holds. 'restricted' removes the blanket grant and replaces it with the linted allowlist in sudoCommands. 'keep' changes nothing, which makes this whole feature decoration. Named sudoMode and not sudo because a feature option becomes an image environment variable, and a container-wide SUDO=drop breaks the common '$SUDO apt-get install' idiom. | string | drop |
+| sudoCommands | Commands the remote user may run as root when sudoMode is restricted, comma separated, each an absolute path with its arguments pinned: '/bin/systemctl restart myapp,/usr/sbin/nginx -s reload'. Every entry is linted at build time and the build fails on a route back to full root - a shell, an interpreter, a wildcard, an unpinned package manager, a firewall tool, a user-writable binary. This list becomes the trust boundary of the feature. See the README. | string |  |
+| sudoAllowUnsafe | Install the sudoCommands allowlist even when the lint rejects an entry. Off by default, and the build fails instead. Turn it on only after you have read each finding and decided it is wrong or acceptable - the findings are routes from an allowed command back to full root, not style notes. | boolean | false |
 ## Host setup
 
 None on the filesystem. This feature mounts nothing from the host, so you create no path before the
@@ -41,8 +42,10 @@ forwarded channels are host-side. Set these on any machine that runs an agent in
 - Run the agent as a different Unix user than the remote user, if you can. A second user cannot
   connect to a forwarded socket at all.
 
-The feature always removes the sudo grant, and the container runs with `no-new-privileges`. Both
-close the same hole: a remote user who regains root undoes every seal. See below.
+The feature takes away the remote user's blanket sudo grant, which closes the hole that matters: a
+remote user who regains root undoes every seal. Add `no-new-privileges` yourself as a second lock —
+the feature does not set it, because it cannot be conditional and it breaks restricted sudo. See
+the sudo section below.
 
 ## What this feature does
 
@@ -92,16 +95,14 @@ zero, and **one connection is enough** to have your host's `ssh-agent` sign some
 reopens on every window you attach, not only the first.
 
 **All of that rests on the remote user not being root.** A stock dev container hands them
-password-less sudo, and one `sudo chmod 666` undoes every seal here. So the feature removes the
-grant. It deletes the `sudoers.d` entry, drops the user from `sudo`/`wheel`/`admin`, then *verifies
-by outcome* and strips the setuid bit from `sudo` if any route survived. **This is the change that
-turns the rest from theatre into something an agent has to work around rather than switch off.** It
-also means `sudo` stops working in the container, for you too.
+password-less sudo, and one `sudo chmod 666` undoes every seal here. So the feature takes the
+blanket grant away. It deletes the `sudoers.d` entry, drops the user from `sudo`/`wheel`/`admin`,
+then *verifies by outcome* and strips the setuid bit from `sudo` if any route survived. **This is
+the change that turns the rest from theatre into something an agent has to work around rather than
+switch off.** It also means `sudo` stops working in the container, for you too.
 
-The feature adds a second lock for the same reason. It sets `no-new-privileges` on the container
-through its `securityOpt`, so no setuid binary can hand back the root the sudo drop took away. This
-one is not optional either, and it needs the sudo drop to stay off your way, because it blocks
-`sudo` for everyone.
+That is `sudoMode: "drop"`, the default. Two other modes exist, and the sudo section below is the
+one part of this README worth reading before you use either.
 
 What the feature *does* hold: once sealed, a UUID-named socket is closed for good. `/tmp` is sticky,
 so the remote user cannot remove a root-owned file in it at all. Recreating one gets you a socket
@@ -188,34 +189,135 @@ sandbox: forwarded host channels in this container
   gpg agent        blocked
   x11 display      blocked
   vscode ipc       blocked
+  sudo             dropped
+  no-new-privs     not set -- add "securityOpt": ["no-new-privileges"] in devcontainer.json
   sweeper          running (inotify, 1s poll backstop)
 ```
 
-**`no-new-privileges` ships with the feature.** The feature declares it in `securityOpt`, so every
-container that installs the feature gets it:
+In restricted mode it lists the allowlist rather than counting it, because the list is the boundary
+and nobody can audit a number:
+
+```console
+  sudo             restricted -- blanket grant gone, 2 command(s) allowed
+                     /bin/systemctl restart myapp
+                     /usr/sbin/nginx -s reload
+  no-new-privs     not set (sudoMode=restricted needs it unset)
+```
+
+## sudo: the three modes, and what each one costs
+
+Every seal this feature makes is a root-owned file. A remote user who can become root undoes all of
+them with one command, so what happens to their sudo grant *is* the feature. Set it with `sudoMode`.
+
+| `sudoMode` | What the remote user can run as root | Use it when |
+| --- | --- | --- |
+| `drop` (default) | Nothing. The grant goes, and the setuid bit goes with it if anything survived. | Almost always. |
+| `restricted` | Only the exact command lines in `sudoCommands`, and only as root. | A project genuinely needs one or two root commands. |
+| `keep` | Everything. This feature becomes decoration. | Never, knowingly. |
+
+**`no-new-privileges` cannot be set by this feature.** The flag blocks every setuid path, so it adds a
+second lock: a setuid binary the drop misses still cannot hand back root. It blocks `sudo` for
+*everyone*, though, restricted included — and a feature cannot set an option conditionally, because
+`devcontainer-feature.json` is static metadata with no way to read an option value. So restricted
+mode and a feature-supplied flag cannot both exist. The flag moves to your `devcontainer.json`,
+where you add it yourself when you use `drop`:
 
 ```jsonc
 "securityOpt": ["no-new-privileges"]
 ```
 
-The flag blocks every setuid path, not just `sudo`. It costs nothing here, because the feature
-already removes the sudo grant, so the flag takes away no privilege you still hold. It adds a second
-lock: a setuid binary the sudo drop missed still cannot hand back root. Setting it in the feature is
-safe only because the sudo drop is unconditional. A version with an optional sudo drop could not do
-this, because the flag breaks `sudo` for everyone. Note that `capDrop` has no equivalent at all,
-feature or otherwise.
+Add it. `sandbox-status` tells you whether it is set, and nags in `drop` mode when it is not. Note
+that `capDrop` has no feature-level equivalent at all.
 
-**The flag reaches inside a nested Docker daemon.** The kernel passes `no_new_privs` to every child
-process, and never clears it. So a `docker-in-docker` daemon in a sandboxed container inherits the
-flag, and hands it to every container it starts. `sudo` in those containers fails with *"the no new
-privileges flag is set"*, whatever their own `securityOpt` says. Give the process the root it needs
-by name — a `remoteUser` of `root`, or `docker run -u root` — rather than by a setuid binary.
+**The flag reaches inside a nested Docker daemon, and cannot be cleared.** The kernel passes
+`no_new_privs` to every child process and never clears it. So a `docker-in-docker` daemon in a
+container that carries the flag hands it to every container it starts. `sudo` in those containers
+fails with *"the no new privileges flag is set"*, whatever their own `securityOpt` says — and so
+does restricted mode, for the same reason. Give the process the root it needs by name — a
+`remoteUser` of `root`, or `docker run -u root` — rather than by a setuid binary.
+
+### Restricted mode
+
+The blanket grant still goes. In its place the feature writes `/etc/sudoers.d/900-sandbox-restricted`
+— one line per entry, root as the only target user, arguments pinned exactly as you wrote them:
+
+```jsonc
+"sudoMode": "restricted",
+"sudoCommands": "/bin/systemctl restart myapp,/usr/sbin/nginx -s reload"
+```
+
+Rules the generator holds to, and why each one:
+
+- **Root only, never `(ALL:ALL)`.** Letting the caller pick the target user buys nothing here and
+  costs the whole runas bug class, CVE-2019-14287 included.
+- **Arguments are pinned.** `sudo -l /usr/bin/id -u` is permitted and `sudo -l /usr/bin/id -g` is
+  not. A sudoers entry with no arguments permits *every* argument, which is the single most common
+  way an allowlist turns out to be a blanket grant.
+- **The file is validated with `visudo` before it is installed.** A syntax error in a `sudoers.d`
+  fragment does not fail that fragment. It makes `sudo` refuse to run at all, for everyone, root
+  included.
+- **It is rewritten at every container start,** like the rest of the feature, because a later
+  feature or a project's `postCreate` can put a blanket grant back.
+
+**The allowlist becomes the trust boundary of the whole feature.** Any command in it that can write
+a file or start a program undoes every seal above. That is not a caveat, it is the deal.
+
+### The lint
+
+`sudoCommands` is checked at build time and the build **fails** on anything that reads as a route
+back to full root. Every rule below is a real escape that a careful reviewer misses, not a style
+rule. Run one by hand at any time:
+
+```console
+$ sandbox.sh lint-sudo '/usr/sbin/iptables'
+error: iptables with no arguments permits every argument, and it rewrites the firewall, which
+       switches off the egress-filter feature entirely
+```
+
+Rejected outright:
+
+| What | Why |
+| --- | --- |
+| A relative path — `systemctl restart x` | The caller owns `PATH`, so the caller picks the binary. |
+| A wildcard — `systemctl reboot *` | A sudoers wildcard is a glob. It matches `/` and spans arguments, so `chmod 666 /tmp/*` permits `chmod 666 /tmp/../etc/shadow`. |
+| Shell syntax — `;` `&&` `\|` `` ` `` `$` `<` `>` quotes | `sudo` execs the command. It never runs a shell, so `/bin/foo; rm -rf /` is one entry, not two. |
+| `!` | sudoers command negation denies a *path*. The same binary copied elsewhere is a different path. |
+| A shell or interpreter — `sh`, `bash`, `python3`, `perl`, `awk`, `node` | Runs anything as root, pinned or not. |
+| A command that runs a command — `env`, `xargs`, `find`, `timeout`, `nohup`, `watch`, `systemd-run` | Same, one step removed. |
+| An editor or pager — `vim`, `less`, `man`, `nano` | Shell escape. `:!sh`. |
+| A privilege tool — `su`, `chroot`, `unshare`, `nsenter`, `setcap`, `passwd`, `usermod`, `mount` | Edits the privilege model itself. |
+| A container runtime — `docker`, `podman`, `runc`, `ctr` | A container mounts the host filesystem as root. |
+| A debugger — `gdb`, `strace` | Drives another process as root. |
+| `needrestart` | A known local root escalation — CVE-2024-48990 and siblings. It reads a poisoned `PYTHONPATH` out of an *unrelated* running process, so sudo's `env_reset` does not stop it. |
+| `true`, `false`, `:` | The feature runs `sudo -n true` to prove the blanket grant is gone. |
+| A binary, or any directory above it, that is not root-owned or is group/other writable | Whoever can write it, or write any directory on the way to it, chooses what `sudo` runs. |
+| Any of the *pin-sensitive* list below **with no arguments** | No arguments means every argument. |
+
+Warned about, and allowed — an entry is only as safe as the exact arguments you pinned:
+
+| What | Why it is only as safe as its arguments |
+| --- | --- |
+| `cp`, `mv`, `tee`, `dd`, `install`, `ln`, `chmod`, `chown` | Writes or re-owns whatever you named. A `cp` whose *source* the remote user can write is a root-owned copy of their content. |
+| `tar`, `unzip`, `rsync`, `scp` | Writes whatever path the archive or the far side names. |
+| `systemctl`, `service` | Starts, stops or masks a unit. And a unit file the remote user can write plus an allowed `daemon-reload` is root. |
+| `apt-get`, `dpkg`, `pip`, `npm`, `gem` | Installing a package runs its maintainer scripts as root. |
+| `git`, `curl`, `ssh`, `socat` | Runs or fetches what the far side chooses. |
+| `journalctl`, `dmesg` | Pipes to a pager, and the pager has a shell escape. Pin `--no-pager`. |
+| `iptables`, `nft`, `ipset`, `ip`, `tc`, `ufw` | Rewrites the firewall, which switches off the `egress-filter` feature in this same repo completely. |
+
+If you have read a finding and decided it is wrong or acceptable, set `sudoAllowUnsafe: true`. It
+downgrades every error to a warning and installs the list anyway. Nothing else changes: the findings
+still print, at build time and at every container start.
+
+**It fails closed, and all the way.** A list that does not lint clean is not installed, and the mode
+degrades to a full `drop` — not to "restricted, minus the rejected entries". You asked for a smaller
+grant than `drop`, so the safe direction to be wrong in is a smaller one still. `sandbox-status`
+says so plainly when this happens.
+
+**There is no way to read the list from a file in the workspace,** and there will not be. The
+workspace is writable by the remote user, so a sudoers list read from it would be a self-service
+root grant. `sudoCommands` is a build-time option only.
 
 Finally, the feature is only as good as the container's user model. **It does nothing if
 `remoteUser` is root**, since root can `chmod` any tombstone back. `install.sh` says so loudly when
 it detects that.
-
-
----
-
-_Note: This file was auto-generated from the [devcontainer-feature.json](https://github.com/nshafer/devcontainer-features/blob/main/src/sandbox/devcontainer-feature.json).  Add additional notes to a `NOTES.md`._

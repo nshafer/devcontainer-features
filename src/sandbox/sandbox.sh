@@ -30,6 +30,8 @@ BLOCK_GPG=true
 BLOCK_X11=true
 BLOCK_IPC=true
 SWEEP_INTERVAL=1
+SUDO_MODE=drop
+SUDO_ALLOW_UNSAFE=false
 # shellcheck disable=SC2034
 USERNAME=root
 USER_HOME=/root
@@ -49,6 +51,11 @@ GNUPG_DIR="${SANDBOX_GNUPG_DIR:-$USER_HOME/.gnupg}"
 # profile, and CI runners have the second of those locked down -- so without this the single most
 # safety-critical branch in this file would go untested exactly where it matters most.
 MOUNTINFO="${SANDBOX_MOUNTINFO:-/proc/self/mountinfo}"
+# Overridable for the same reason. The sudoers fragment is named to sort after anything a distro
+# or another feature drops in there, and with no dot or tilde in it -- sudo silently ignores a
+# file in sudoers.d whose name has either.
+SUDOERS_FILE="${SANDBOX_SUDOERS_FILE:-/etc/sudoers.d/900-sandbox-restricted}"
+SUDO_COMMANDS_FILE="${SANDBOX_SUDO_COMMANDS_FILE:-/usr/local/share/devcontainer/sandbox/sudo-commands}"
 
 log() { echo "==> sandbox: $*"; }
 warn() { echo "!!! sandbox: $*" >&2; }
@@ -96,6 +103,15 @@ tombstone() {
 # So the grant goes. This is the single change that turns the rest of the feature from theatre into
 # something an agent has to work around rather than simply switch off.
 #
+# Three modes, because a project that genuinely needs a root command should not have to choose
+# between that command and the whole feature:
+#
+#   drop        the blanket grant goes and nothing replaces it. The default, and the only mode
+#               where the setuid bit comes off sudo as a last resort.
+#   restricted  the blanket grant goes and a linted allowlist replaces it. The allowlist is then
+#               the trust boundary -- see lint_sudo_entry for what that costs.
+#   keep        nothing is touched. Every seal in this feature is one command from being undone.
+#
 # Re-asserted at every container start, not just at build time, because a later feature or a
 # project's own postCreate can put the grant back.
 sudo_works() {
@@ -107,16 +123,264 @@ sudo_works() {
     fi
 }
 
-drop_sudo() {
-    if [ "$USERNAME" = root ]; then
-        warn "the remote user is root, so there is no sudo grant to drop and nothing here binds"
+# `sudo -n true` is the probe for "a blanket grant exists", and it only works while nothing can
+# allowlist `true`. That is why lint_sudo_entry refuses it by name rather than as a style rule.
+
+# The container-wide setuid lock. The feature used to declare it in securityOpt and no longer can:
+# the flag blocks every setuid path, sudo included, so a feature that ships it unconditionally
+# cannot also offer restricted sudo. It moved to the README as a line the user adds. Reported here
+# so neither half of that trade is silent.
+no_new_privs_set() {
+    grep -qE '^NoNewPrivs:[[:space:]]*1$' /proc/self/status 2>/dev/null
+}
+
+trim() {
+    local s="$1"
+    s="${s#"${s%%[![:space:]]*}"}"
+    printf '%s' "${s%"${s##*[![:space:]]}"}"
+}
+
+# One entry per line, written by install.sh. A separate file rather than a line in `config`
+# because config is sourced: a command list is the one value here a human writes by hand, and it
+# carries spaces and punctuation that have no business being evaluated by a shell.
+read_sudo_commands() {
+    local line
+    [ -r "$SUDO_COMMANDS_FILE" ] || return 0
+    while IFS= read -r line; do
+        line="$(trim "$line")"
+        case "$line" in '' | '#'*) continue ;; esac
+        printf '%s\n' "$line"
+    done < "$SUDO_COMMANDS_FILE"
+}
+
+sudo_command_count() { read_sudo_commands | grep -c . || true; }
+
+# --------------------------------------------------------------------------------------------
+# The allowlist lint.
+#
+# A restricted sudoers file is only ever as good as the commands in it, and the failure mode is
+# not that it looks dangerous -- it is that it looks careful. A real-world file that allowlisted
+# exactly seven commands, every one of them a plausible operational need, handed out root twice
+# over: once through an unpinned `iptables` and once through `needrestart`. Nothing about either
+# line reads as a shell.
+#
+# So the lint is not a style check. Every rule below is a route to root that a reviewer misses.
+# It runs at build time, where it fails the build, and again at every container start, where a
+# failure falls back to dropping sudo entirely rather than installing a list it cannot vouch for.
+
+# Basenames that give away root whatever arguments follow, so pinning the arguments does not help.
+sudo_deny_reason() {
+    case "$1" in
+        sh | bash | dash | zsh | ksh | csh | tcsh | fish | ash | rbash | busybox | toybox)
+            echo "it is a shell, so it runs anything as root" ;;
+        perl | perl5 | python | python2 | python3 | ruby | node | nodejs | php | lua | luajit | tclsh | expect | awk | gawk | mawk | nawk)
+            echo "it is an interpreter, so it runs anything as root" ;;
+        su | sudo | sudoedit | doas | pkexec | runuser | chroot | unshare | nsenter | capsh | setpriv | newgrp)
+            echo "it starts a process as another user, which is a root shell" ;;
+        setcap | setfacl | visudo | passwd | chpasswd | useradd | usermod | adduser | groupmod | groupadd | mount | umount)
+            echo "it edits the privilege model itself" ;;
+        env | xargs | find | nohup | setsid | timeout | stdbuf | script | watch | nice | ionice | flock | systemd-run | at | batch | crontab)
+            echo "it runs a command you name, so it runs anything as root" ;;
+        vi | vim | nvim | view | ex | ed | nano | pico | emacs | less | more | most | pg | man | info)
+            echo "it has a shell escape, so it gives a root shell" ;;
+        docker | podman | nerdctl | ctr | crictl | runc | lxc-attach | machinectl)
+            echo "it starts a container, and a container can mount the host filesystem as root" ;;
+        gdb | strace | ltrace | perf)
+            echo "it attaches to and drives another process as root" ;;
+        needrestart)
+            echo "it is a known local root escalation (CVE-2024-48990 and siblings)" ;;
+        true | false | :)
+            echo "the feature runs 'sudo -n true' to prove the blanket grant is gone" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Basenames that are root with free arguments and merely risky with pinned ones. An entry with no
+# arguments allows every argument, so for these that is an error; with the arguments pinned it is
+# a warning, because the entry is then only as safe as what those arguments point at.
+sudo_pin_reason() {
+    case "$1" in
+        cp | mv | dd | tee | install | ln | link | truncate | touch | rm | rmdir | shred | chmod | chown | chgrp)
+            echo "it writes or re-owns any file you name" ;;
+        tar | cpio | unzip | zip | 7z | 7za | rsync | scp | sftp)
+            echo "it writes any path the archive or the far side names" ;;
+        sed | patch | tac | diff3 | tail | head | cat)
+            echo "it reads or edits any file you name, and sed -i writes one" ;;
+        systemctl | service | initctl | rc-service | openrc | telinit)
+            echo "with free arguments it starts, stops or masks any unit" ;;
+        apt | apt-get | apt-key | aptitude | dpkg | dpkg-reconfigure | yum | dnf | rpm | apk | pacman | zypper | snap | flatpak | pip | pip3 | npm | npx | yarn | pnpm | gem | cargo | composer)
+            echo "installing a package runs its maintainer scripts as root" ;;
+        git | ssh | curl | wget | nc | ncat | netcat | socat | nmap | tcpdump)
+            echo "it fetches or runs what the far side chooses" ;;
+        journalctl | dmesg)
+            echo "it pipes to a pager, and the pager has a shell escape -- pin --no-pager" ;;
+        iptables | ip6tables | iptables-save | iptables-restore | ip6tables-save | ip6tables-restore | iptables-legacy | iptables-nft | nft | ipset | ip | tc | ebtables | arptables | conntrack | firewall-cmd | ufw)
+            echo "it rewrites the firewall, which switches off the egress-filter feature entirely" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Prints every finding on stdout, one per line, prefixed error: or warn:. Returns 2 for an error,
+# 1 for warnings only, 0 for clean.
+lint_sudo_entry() {
+    local entry bin base reason mode owner dir rc=0 has_args=no
+
+    entry="$(trim "$1")"
+    [ -n "$entry" ] || return 0
+
+    _err() { echo "error: $*"; rc=2; }
+    _warn() { echo "warn:  $*"; [ "$rc" -ge 1 ] || rc=1; }
+
+    # A control character means the entry came from somewhere it should not have.
+    if [ "$entry" != "$(printf '%s' "$entry" | tr -d '\000-\037')" ]; then
+        _err "the entry contains a control character"
+    fi
+
+    # sudo execs the command directly. It never runs a shell, so every one of these is a author
+    # who expects semantics they will not get -- and `sudo /bin/foo; rm -rf /` reads as one entry.
+    case "$entry" in
+        *[\;\&\|\`\$\<\>\"\'\\]*)
+            _err "shell syntax does not work here: sudo execs the command, it never runs a shell" ;;
+    esac
+
+    # The classic sudoers escape. A sudoers wildcard is a glob, and a glob matches / and matches
+    # across argument boundaries: `apt-get install *` permits `apt-get install --option=...`,
+    # and `chmod 666 /tmp/*` permits `chmod 666 /tmp/../etc/shadow`.
+    case "$entry" in
+        *[\*\?\[\]]*)
+            _err "a wildcard matches / and matches across arguments, so it permits far more than it reads as" ;;
+    esac
+
+    # Command negation in sudoers is bypassable by definition: it denies a path, and the same
+    # binary reached by another path or a copy is a different path.
+    case "$entry" in
+        *'!'*) _err "sudoers command negation is bypassable -- allow what is needed instead of denying what is not" ;;
+    esac
+
+    # Characters that are special to sudoers itself, not to a shell. The entry is interpolated into
+    # a sudoers line verbatim (see write_restricted_sudoers), and visudo checks that the result
+    # parses, not that it means one grant. A ':' starts a second host-spec, '=' and '(' start a
+    # second privilege spec, and '#' begins a comment that silently drops every argument after it --
+    # so any of them smuggles a second grant out of a line that reads as one pinned command.
+    case "$entry" in
+        *[:=\(\)\#]*)
+            _err "the characters : = ( ) # are special to sudoers and can smuggle a second grant past the lint" ;;
+    esac
+
+    bin="${entry%% *}"
+    base="${bin##*/}"
+    [ "$entry" = "$bin" ] || has_args=yes
+
+    case "$bin" in
+        /*) ;;
+        *) _err "$bin is not an absolute path, so PATH decides what runs -- and the caller owns PATH" ;;
+    esac
+    case "$bin" in
+        */../* | */..) _err "$bin walks through .., so the path checked is not the path run" ;;
+    esac
+
+    if reason="$(sudo_deny_reason "$base")"; then
+        _err "$base is never safe to allow, pinned or not: $reason"
+    elif reason="$(sudo_pin_reason "$base")"; then
+        if [ "$has_args" = no ]; then
+            _err "$base with no arguments permits every argument, and $reason"
+        else
+            _warn "$base is only as safe as these exact arguments: $reason"
+        fi
+    elif [ "$has_args" = no ]; then
+        _warn "$bin has no arguments, so every argument is permitted. Pin the arguments."
+    fi
+
+    # Who owns the binary owns what sudo runs. -L throughout, and every ancestor directory, not
+    # just the last one: a symlink's own mode is always 777 and says nothing, and a writable
+    # directory anywhere along the path lets the whole subtree below it be replaced. /usr/local/bin
+    # group-writable, or a tool under an /opt the remote user owns, is the grant handed straight
+    # back with nothing in the entry itself looking wrong.
+    #
+    # Only for an absolute path. A relative one is already an error above, and running the ancestor
+    # walk on it would resolve against the current directory and never terminate: dirname of a bare
+    # name walks down to ".", whose dirname is "." forever, and the "$dir" = / break never fires.
+    if [ "${bin#/}" != "$bin" ] && [ -e "$bin" ]; then
+        if [ ! -f "$bin" ]; then
+            _err "$bin is not a regular file"
+        else
+            owner="$(stat -L -c %u "$bin" 2>/dev/null || echo -1)"
+            mode="$(stat -L -c %a "$bin" 2>/dev/null || echo 777)"
+            [ "$owner" = 0 ] || _err "$bin is owned by uid $owner, not root, so its owner chooses what sudo runs"
+            [ "$(( 8#$mode & 8#022 ))" -eq 0 ] || _err "$bin is mode $mode, so group or other can rewrite what sudo runs"
+
+            # Only the first bad ancestor is reported. Every directory above it is bad for the
+            # same reason, and eight copies of one finding buries the seven other entries.
+            dir="$bin"
+            while dir="$(dirname "$dir")"; do
+                owner="$(stat -L -c %u "$dir" 2>/dev/null || echo -1)"
+                mode="$(stat -L -c %a "$dir" 2>/dev/null || echo 777)"
+                if [ "$owner" != 0 ]; then
+                    _err "$dir is owned by uid $owner, not root, so what is under it can be swapped"
+                    break
+                fi
+                if [ "$(( 8#$mode & 8#022 ))" -ne 0 ]; then
+                    _err "$dir is mode $mode, so what is under it can be swapped"
+                    break
+                fi
+                [ "$dir" = / ] && break
+            done
+        fi
+    else
+        _warn "$bin does not exist yet, so its owner and mode could not be checked"
+    fi
+
+    unset -f _err _warn
+    return "$rc"
+}
+
+# Lints the whole list. Prints each entry with its findings underneath. Returns 1 if any entry
+# raised an error.
+lint_sudo_commands() {
+    local entry out rc errors=0 warnings=0 total=0
+
+    while IFS= read -r entry; do
+        total=$((total + 1))
+        out="$(lint_sudo_entry "$entry")"
+        rc=$?
+        case "$rc" in
+            2) errors=$((errors + 1)) ;;
+            1) warnings=$((warnings + 1)) ;;
+        esac
+        if [ -n "$out" ]; then
+            echo "  $entry"
+            # SC2001: the parameter-expansion form cannot indent every line of a multi-line
+            # string, only substitute within it. sed is the right tool here.
+            # shellcheck disable=SC2001
+            echo "$out" | sed 's/^/      /'
+        else
+            echo "  $entry"
+            echo "      ok"
+        fi
+    done < <(read_sudo_commands)
+
+    if [ "$total" -eq 0 ]; then
+        warn "sudoMode is restricted but sudoCommands is empty, so this behaves exactly like drop"
         return 0
     fi
-    sudo_works || return 0
 
-    # The grant common-utils writes is /etc/sudoers.d/<username>; drop any file that names the user.
+    log "sudo allowlist: $total entries, $errors with an error, $warnings with a warning"
+    [ "$errors" -eq 0 ]
+}
+
+# --------------------------------------------------------------------------------------------
+
+# Takes away every blanket route to root. Shared by drop and restricted, and idempotent, because
+# it runs again at every container start.
+remove_blanket_sudo() {
+    local f grp
+
+    # The grant common-utils writes is /etc/sudoers.d/<username>; drop any file that names the
+    # user. Skipping this feature's own file matters more than it looks: it names the user on
+    # every line, so without the guard restricted mode would delete its own allowlist.
     for f in /etc/sudoers.d/*; do
         [ -f "$f" ] || continue
+        [ "$f" = "$SUDOERS_FILE" ] && continue
         if grep -qE "^[[:space:]]*${USERNAME}[[:space:]]" "$f" 2>/dev/null; then
             rm -f "$f" && log "removed sudo grant $f"
         fi
@@ -130,10 +394,135 @@ drop_sudo() {
             fi
         fi
     done
+}
 
+# One command per line and root as the only target. Not (ALL:ALL): letting the caller pick the
+# target user buys nothing here and costs the whole class of runas bugs, CVE-2019-14287 included.
+#
+# Nothing is escaped on the way in, and it does not need to be. sudoers wants a backslash before
+# a comma, a colon, an equals or a backslash -- and the lint has already refused all of those: the
+# backslash and the colon, equals, parenthesis and hash as sudoers metacharacters, and the comma
+# is the option separator so it cannot reach here. visudo below is the last check, not the only
+# one: it confirms the fragment parses, but a smuggled second grant parses too, so the metacharacter
+# refusal above is what stops it. A fragment that will not parse is never installed.
+write_restricted_sudoers() {
+    local tmp entry n=0
+
+    tmp="$(mktemp)" || { warn "could not create a temporary file for the sudoers fragment"; return 1; }
+
+    {
+        echo "# Generated by the sandbox devcontainer feature. Rewritten at every container start."
+        echo "# Do not edit: set sudoCommands on the feature instead."
+        echo "#"
+        echo "# The blanket grant is gone. Only these commands run as root, with these exact"
+        echo "# arguments. This list is now the trust boundary of the whole feature: any command"
+        echo "# here that can write a file or start a program undoes every seal the sandbox makes."
+        echo ""
+    } > "$tmp"
+
+    while IFS= read -r entry; do
+        printf '%s ALL=(root) NOPASSWD: %s\n' "$USERNAME" "$entry" >> "$tmp"
+        n=$((n + 1))
+    done < <(read_sudo_commands)
+
+    if [ "$n" -eq 0 ]; then
+        rm -f "$tmp"
+        return 1
+    fi
+
+    # A syntax error in a sudoers.d fragment does not fail that fragment. It makes sudo refuse to
+    # run at all, for everyone, root included. So it is checked before it is installed, never
+    # after.
+    if command -v visudo >/dev/null 2>&1; then
+        if ! visudo -cqf "$tmp" >/dev/null 2>&1; then
+            warn "the generated sudoers fragment does not parse, so it was not installed:"
+            visudo -cf "$tmp" 2>&1 | sed 's/^/!!!   /' >&2
+            rm -f "$tmp"
+            return 1
+        fi
+    else
+        warn "visudo is not installed, so the generated sudoers fragment could not be checked"
+    fi
+
+    if install -o root -g root -m 0440 "$tmp" "$SUDOERS_FILE" 2>/dev/null; then
+        rm -f "$tmp"
+        log "wrote $n allowed command(s) to $SUDOERS_FILE"
+        return 0
+    fi
+    rm -f "$tmp"
+    warn "could not install $SUDOERS_FILE"
+    return 1
+}
+
+apply_sudo_policy() {
+    case "$SUDO_MODE" in
+        drop | restricted | keep) ;;
+        *)
+            warn "unknown sudoMode '$SUDO_MODE'; treating it as drop"
+            SUDO_MODE=drop
+            ;;
+    esac
+
+    # Clear this feature's own previous allowlist before anything else, so every mode transition is
+    # handled in one place rather than only restricted->drop. A prior build's fragment must not
+    # survive a switch to keep, to drop, or to a root remote user -- restricted rewrites it below.
+    rm -f "$SUDOERS_FILE"
+
+    if [ "$SUDO_MODE" = keep ]; then
+        warn "sudoMode=keep: $USERNAME keeps sudo, so every seal in this feature is one command"
+        warn "  from being undone. This feature is decoration in this configuration."
+        return 0
+    fi
+
+    if [ "$USERNAME" = root ]; then
+        warn "the remote user is root, so there is no sudo grant to drop and nothing here binds"
+        return 0
+    fi
+
+    remove_blanket_sudo
+
+    # Fails closed, and all the way: a list that does not lint clean is not installed, and the mode
+    # degrades to a full drop rather than to "restricted, minus the part that was rejected". The
+    # user asked for a smaller grant than drop, so the safe direction to miss in is a smaller one
+    # still.
+    if [ "$SUDO_MODE" = restricted ]; then
+        if lint_sudo_commands; then
+            write_restricted_sudoers || { warn "falling back to a full sudo drop"; SUDO_MODE=drop; }
+        elif [ "$SUDO_ALLOW_UNSAFE" = true ]; then
+            warn "sudoAllowUnsafe=true, so the allowlist above is installed with its errors."
+            warn "  Root in this container is now whatever those entries permit."
+            write_restricted_sudoers || { warn "falling back to a full sudo drop"; SUDO_MODE=drop; }
+        else
+            warn "the sudo allowlist has errors, so it was NOT installed. Sudo is fully dropped."
+            warn "  Fix the entries above, or set sudoAllowUnsafe to accept them."
+            SUDO_MODE=drop
+        fi
+    fi
+
+    if [ "$SUDO_MODE" = restricted ]; then
+        # The whole allowlist is dead weight under this flag, and nothing about the failure says
+        # so: sudo reports it, but only to whoever runs a command and reads the error.
+        if no_new_privs_set; then
+            warn "no_new_privs is set on this container, so sudo cannot run at all -- it is setuid."
+            warn "  Remove \"securityOpt\": [\"no-new-privileges\"] from devcontainer.json, or this"
+            warn "  allowlist has no effect. The flag is also inherited, so a parent container's"
+            warn "  copy of it lands here too and cannot be cleared from inside."
+        fi
+
+        if sudo_works; then
+            warn "$USERNAME can still run any command with sudo, so the allowlist is not the"
+            warn "  boundary. Something outside this feature grants it. Use sudoMode=drop."
+        else
+            log "restricted sudo in place for $USERNAME"
+        fi
+        return 0
+    fi
+
+    # drop. The stale allowlist was already cleared at the top of this function.
     # Verified by outcome, not by the steps above: sudo is configurable in more ways than are worth
     # enumerating, and a grant this missed would silently hand back everything. If it still works,
     # take the setuid bit off the binary, which no amount of sudoers configuration can restore.
+    # Only ever in this mode -- in restricted mode it would break the allowlist along with the rest.
     if sudo_works; then
         local bin
         bin="$(command -v sudo 2>/dev/null)"
@@ -382,11 +771,47 @@ status() {
 
     # Reported first among the mechanisms, because it is the one the others depend on: with sudo
     # in hand every seal above is one command from being undone.
-    if sudo_works; then
+    # The mode as it actually came out, not as it was asked for. apply_sudo_policy degrades
+    # restricted to drop whenever the allowlist does not lint clean, and a status line that still
+    # said "restricted" would be reporting the request rather than the result.
+    local entry eff_mode="$SUDO_MODE"
+    if [ "$eff_mode" = restricted ] && [ ! -f "$SUDOERS_FILE" ]; then
+        eff_mode=drop-after-rejected-allowlist
+    fi
+
+    if [ "$eff_mode" = keep ]; then
+        printf '  %-16s KEPT for %s -- every block above is undoable (sudoMode=keep)\n' "sudo" "$USERNAME"
+        open=$((open + 1))
+    elif sudo_works; then
         printf '  %-16s STILL AVAILABLE to %s -- every block above is undoable\n' "sudo" "$USERNAME"
         open=$((open + 1))
+    elif [ "$eff_mode" = restricted ]; then
+        printf '  %-16s restricted -- blanket grant gone, %s command(s) allowed\n' \
+            "sudo" "$(sudo_command_count)"
+        # Listed rather than counted, because in this mode the list is the boundary and a reader
+        # cannot check a number.
+        while IFS= read -r entry; do
+            printf '  %-16s   %s\n' "" "$entry"
+        done < <(read_sudo_commands)
+    elif [ "$eff_mode" = drop-after-rejected-allowlist ]; then
+        printf '  %-16s dropped -- sudoMode is restricted, but that allowlist was rejected\n' "sudo"
     else
         printf '  %-16s dropped\n' "sudo"
+    fi
+
+    # Advisory, never counted as an open channel: the feature cannot set this flag itself any more
+    # (see no_new_privs_set), so a container without it is the normal case and not a fault.
+    if no_new_privs_set; then
+        if [ "$eff_mode" = restricted ]; then
+            printf '  %-16s SET -- sudo is setuid, so no allowed command can run\n' "no-new-privs"
+        else
+            printf '  %-16s set\n' "no-new-privs"
+        fi
+    elif [ "$eff_mode" = restricted ] || [ "$eff_mode" = keep ]; then
+        printf '  %-16s not set (sudoMode=%s needs it unset)\n' "no-new-privs" "$SUDO_MODE"
+    else
+        printf '  %-16s not set -- add "securityOpt": ["no-new-privileges"] in devcontainer.json\n' \
+            "no-new-privs"
     fi
 
     if pgrep -f 'sandbox\.sh daemon' >/dev/null 2>&1; then
@@ -474,10 +899,16 @@ daemon() {
 case "${1:-sweep}" in
     block-fixed)    block_fixed ;;
     repair)         repair ;;
-    drop-sudo)      drop_sudo ;;
+    apply-sudo)     apply_sudo_policy ;;
+    # Kept as a synonym: an image built by an older version of this feature still has that
+    # version's entrypoint baked in, and it calls this name.
+    drop-sudo)      apply_sudo_policy ;;
+    # With an argument it lints that one entry, for a test. With none it lints the configured
+    # list, which is what install.sh calls to fail a build.
+    lint-sudo)      if [ -n "${2:-}" ]; then lint_sudo_entry "$2"; else lint_sudo_commands; fi ;;
     sweep)          block_fixed; sweep ;;
     daemon)         daemon ;;
     status)         status ;;
     check-manifest) check_manifest "${2:-$$}" ;;
-    *)              echo "usage: sandbox.sh {repair|drop-sudo|block-fixed|sweep|daemon|status|check-manifest}" >&2; exit 2 ;;
+    *)              echo "usage: sandbox.sh {repair|apply-sudo|lint-sudo [entry]|block-fixed|sweep|daemon|status|check-manifest}" >&2; exit 2 ;;
 esac

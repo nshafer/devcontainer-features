@@ -32,5 +32,25 @@
     "features": {
       "sandbox": {}
     }
+  },
+  "restricted_sudo": {
+    "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+    "remoteUser": "node",
+    "features": {
+      "sandbox": {
+        "sudoMode": "restricted",
+        "sudoCommands": "/usr/bin/id -u,/usr/bin/cp /etc/hosts /etc/hosts.bak"
+      }
+    }
+  },
+  "restricted_sudo_policy": {
+    "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+    "remoteUser": "root",
+    "features": {
+      "sandbox": {
+        "sudoMode": "restricted",
+        "sudoCommands": "/usr/bin/id -u"
+      }
+    }
   }
 }

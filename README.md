@@ -202,7 +202,9 @@ Another option with VS Code is to use the "Default Features" setting to use feat
 one — see [its notes](src/tidewave) — so it belongs in the projects that actually want it.
 
 `egress-filter` is not in it either. It adds the `NET_ADMIN` capability and needs `sandbox`'s sudo
-drop, so it belongs in the containers that run an agent.
+drop, so it belongs in the containers that run an agent. Note that `sandbox`'s `restricted` sudo mode
+undermines it if the allowlist names a firewall tool: root `iptables` flushes the whole filter. The
+lint warns about exactly that.
 
 `sandbox` is not in it either, for the opposite reason: it works everywhere, but it is supposed to
 break things. Signing commits, `git push` over SSH, `code .` from the container terminal, GUI apps on
@@ -320,14 +322,16 @@ One order to keep in mind if that option is ever turned off. The entrypoints run
 host that has them, dockerd would move to legacy after `egress-filter` had already written its chain
 to nft, and `egress-status` as root would then read the empty backend.
 
-**`sudo` is gone, so the tools ship in the image.** `sandbox` removes the remote user's sudo grant at
-container start, so `make`, `python3`, `shellcheck` and `iptables` are installed in
+**`sudo` is gone, so the tools ship in the image.** `sandbox` removes the remote user's blanket sudo
+grant at container start, so `make`, `python3`, `shellcheck` and `iptables` are installed in
 `.devcontainer/Dockerfile` rather than added later from a terminal. The same feature blocks the VS
 Code git credential helper, so a push authenticates through `gh auth login`, which is what the
 `github-cli` feature is there for.
 
 **`sudo` is gone from the test containers too, which is why some scenarios run as root.**
-`sandbox` sets `no-new-privileges` on this container. The kernel passes `no_new_privs` to every
+`.devcontainer/devcontainer.json` sets `no-new-privileges` on this container. It used to arrive with
+the `sandbox` feature, and cannot any more — the flag blocks every setuid path, `sudo` included, so a
+feature that ships it unconditionally cannot also offer `sandbox`'s restricted sudo mode. The kernel passes `no_new_privs` to every
 child process and never clears it, so the inner dockerd carries it, and so does every container the
 test harness starts. A setuid binary cannot run there, and `sudo` is setuid. The `egress-filter`
 tests are the only ones that wanted root — to read the iptables chain, and to rebuild the allowlist

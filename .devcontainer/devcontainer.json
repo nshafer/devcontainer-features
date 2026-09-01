@@ -2,6 +2,18 @@
   "name": "devcontainer-features",
   "build": { "dockerfile": "Dockerfile" },
   "remoteUser": "node",
+
+  // The second lock behind sandbox's sudo drop. It used to arrive with the feature, in its
+  // securityOpt, and cannot any more: the flag blocks every setuid path including sudo itself, so a
+  // feature that shipped it unconditionally could never also offer sandbox's restricted sudo mode --
+  // and a feature cannot set an option conditionally. So it is declared here instead. Keep it while
+  // this container uses sudoMode drop, which is the default.
+  //
+  // The kernel passes no_new_privs to every child process and never clears it, so the inner dockerd
+  // carries it and so does every container the test harness starts. That is why several test
+  // scenarios have a remoteUser of root: sudo is setuid, and it cannot work in there.
+  "securityOpt": ["no-new-privileges"],
+
   "features": {
     // The features under development, by path rather than by registry reference. A path feature is
     // built from the working tree, so "Rebuild Container" is how a change is tried -- the published

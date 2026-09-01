@@ -1,8 +1,8 @@
 {
   "id": "sandbox",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "name": "Sandbox (nshafer)",
-  "description": "Seals the host sockets VS Code forwards into a dev container - SSH agent, GPG agent, X11 and the VS Code IPC channels - and removes the remote user's sudo grant so the seals cannot simply be undone. Mitigation, not a boundary: the socket must exist for the container to attach, so there is a short window at each attach. See the README.",
+  "description": "Seals the host sockets VS Code forwards into a dev container - SSH agent, GPG agent, X11 and the VS Code IPC channels - and takes away the remote user's blanket sudo grant so the seals cannot simply be undone. Mitigation, not a boundary: the socket must exist for the container to attach, so there is a short window at each attach. See the README.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/sandbox",
   "options": {
     "blockSshAgent": {
@@ -38,11 +38,28 @@
         "5"
       ],
       "description": "Seconds between backstop sweeps. Sealing is normally driven by inotify, within about a millisecond of a socket appearing; this poll only catches what inotify missed, so it rarely needs changing."
+    },
+    "sudoMode": {
+      "type": "string",
+      "default": "drop",
+      "enum": [
+        "drop",
+        "restricted",
+        "keep"
+      ],
+      "description": "What happens to the remote user's sudo grant. 'drop' removes it and everything that could restore it - the default, and the only mode where every seal in this feature holds. 'restricted' removes the blanket grant and replaces it with the linted allowlist in sudoCommands. 'keep' changes nothing, which makes this whole feature decoration. Named sudoMode and not sudo because a feature option becomes an image environment variable, and a container-wide SUDO=drop breaks the common '$SUDO apt-get install' idiom."
+    },
+    "sudoCommands": {
+      "type": "string",
+      "default": "",
+      "description": "Commands the remote user may run as root when sudoMode is restricted, comma separated, each an absolute path with its arguments pinned: '/bin/systemctl restart myapp,/usr/sbin/nginx -s reload'. Every entry is linted at build time and the build fails on a route back to full root - a shell, an interpreter, a wildcard, an unpinned package manager, a firewall tool, a user-writable binary. This list becomes the trust boundary of the feature. See the README."
+    },
+    "sudoAllowUnsafe": {
+      "type": "boolean",
+      "default": false,
+      "description": "Install the sudoCommands allowlist even when the lint rejects an entry. Off by default, and the build fails instead. Turn it on only after you have read each finding and decided it is wrong or acceptable - the findings are routes from an allowed command back to full root, not style notes."
     }
   },
-  "securityOpt": [
-    "no-new-privileges"
-  ],
   "entrypoint": "/usr/local/share/devcontainer/sandbox/entrypoint.sh",
   "postStartCommand": "/usr/local/share/devcontainer/sandbox/post-start.sh",
   "postAttachCommand": "/usr/local/share/devcontainer/sandbox/post-attach.sh",
