@@ -257,16 +257,6 @@ lint_sudo_entry() {
         *'!'*) _err "sudoers command negation is bypassable -- allow what is needed instead of denying what is not" ;;
     esac
 
-    # Characters that are special to sudoers itself, not to a shell. The entry is interpolated into
-    # a sudoers line verbatim (see write_restricted_sudoers), and visudo checks that the result
-    # parses, not that it means one grant. A ':' starts a second host-spec, '=' and '(' start a
-    # second privilege spec, and '#' begins a comment that silently drops every argument after it --
-    # so any of them smuggles a second grant out of a line that reads as one pinned command.
-    case "$entry" in
-        *[:=\(\)\#]*)
-            _err "the characters : = ( ) # are special to sudoers and can smuggle a second grant past the lint" ;;
-    esac
-
     bin="${entry%% *}"
     base="${bin##*/}"
     [ "$entry" = "$bin" ] || has_args=yes
@@ -399,14 +389,16 @@ remove_blanket_sudo() {
 # One command per line and root as the only target. Not (ALL:ALL): letting the caller pick the
 # target user buys nothing here and costs the whole class of runas bugs, CVE-2019-14287 included.
 #
-# Nothing is escaped on the way in, and it does not need to be. sudoers wants a backslash before
-# a comma, a colon, an equals or a backslash -- and the lint has already refused all of those: the
-# backslash and the colon, equals, parenthesis and hash as sudoers metacharacters, and the comma
-# is the option separator so it cannot reach here. visudo below is the last check, not the only
-# one: it confirms the fragment parses, but a smuggled second grant parses too, so the metacharacter
-# refusal above is what stops it. A fragment that will not parse is never installed.
+# Every entry is escaped on the way in. sudoers reads ':' '=' '(' ')' and '#' as structure -- a
+# ':' starts a second host-spec, '=' and '(' start a second privilege spec, and '#' begins a
+# comment -- so an unescaped one in a command argument smuggles a second grant out of a line that
+# reads as one pinned command. A backslash before each makes it a literal argument character, which
+# is what lets a real argument like 'CPUQuota=50%' or a 'https://' URL work. The backslash itself,
+# the comma and the shell metacharacters cannot reach here: the lint refuses the first two by
+# character, and the comma is the option separator. visudo below is the last check: a fragment that
+# still does not parse is never installed, and the mode degrades to a full drop.
 write_restricted_sudoers() {
-    local tmp entry n=0
+    local tmp entry esc n=0
 
     tmp="$(mktemp)" || { warn "could not create a temporary file for the sudoers fragment"; return 1; }
 
@@ -421,7 +413,8 @@ write_restricted_sudoers() {
     } > "$tmp"
 
     while IFS= read -r entry; do
-        printf '%s ALL=(root) NOPASSWD: %s\n' "$USERNAME" "$entry" >> "$tmp"
+        esc="$(printf '%s' "$entry" | sed 's/[:=()#]/\\&/g')"
+        printf '%s ALL=(root) NOPASSWD: %s\n' "$USERNAME" "$esc" >> "$tmp"
         n=$((n + 1))
     done < <(read_sudo_commands)
 
