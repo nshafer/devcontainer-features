@@ -15,9 +15,10 @@
 # to $SRC anyway, and nothing below should ever start to — the source is the host's own git
 # directory, and a stray write there would land on the host.
 #
-# The files are copied whole, sections and all. Nothing is stripped on the way in: a filter driver
-# whose command is missing here is worth the hard failure it causes, because that failure is the
-# thing that tells you to install the tool in the container.
+# The files are copied whole, sections and all. A filter driver whose command is missing here is
+# worth the hard failure it causes, because that failure is the thing that tells you to install the
+# tool in the container. The one exception is credential.*, which never travels — see
+# strip_credentials below.
 set -euo pipefail
 
 # The default is the mount; the override exists so the test suite can drive this with a synthetic
@@ -42,7 +43,37 @@ write_file() {
     echo "==> git-config: $src -> $dst"
 }
 
+# credential.* never travels. A helper names a program of the host (gh, osxkeychain, manager) that
+# this container does not have, and git errors on each credential request. Worse, the VS Code
+# extension writes its own helper into the host's global config -- a path to
+# /tmp/vscode-remote-containers-<uuid>.js from a session that is over. Copied forward, that helper
+# is dead on arrival. The extension installs a live helper of its own in /etc/gitconfig on every
+# connect (dev.containers.gitCredentialHelperConfigLocation, "system" by default), so the copy is
+# not what makes credentials work in a VS Code container. A container from the CLI gets no helper
+# at all now, which is the honest result: authenticate with `gh auth login` or use an SSH remote.
+strip_credentials() {
+    local dst="$1" sections section
+    [ -e "$dst" ] || return 0
+
+    # Same rule as write_file: a file without the marker belongs to someone else. Leave it alone.
+    head -n1 "$dst" 2>/dev/null | grep -qF "$MARKER" || return 0
+
+    # Sections, not keys, so no empty header is left behind. A listed name minus its last component
+    # is the section to remove: credential.https://github.com.helper -> credential.https://github.com,
+    # credential.helper -> credential. Collect the list before the loop rewrites the file.
+    sections="$(git config --file "$dst" --name-only --list 2>/dev/null \
+        | sed -n 's/^\(credential\..*\)\.[^.]*$/\1/p; s/^credential\.[^.]*$/credential/p' \
+        | sort -u || true)"
+
+    while IFS= read -r section; do
+        [ -n "$section" ] || continue
+        git config --file "$dst" --remove-section "$section" || true
+        echo "==> git-config: dropped [$section] (credential config does not travel)"
+    done <<< "$sections"
+}
+
 write_file "$SRC/config" "$HOME/.config/git/config"
+strip_credentials "$HOME/.config/git/config"
 write_file "$SRC/ignore" "$HOME/.config/git/ignore"
 
 # The cleanup the VS Code extension runs after its own copy: keys naming a program the host has and

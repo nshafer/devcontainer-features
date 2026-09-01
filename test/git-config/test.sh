@@ -20,8 +20,14 @@ check "copied config matches the host's values" bash -c '
     want=$(git config -f /mnt/git-config/config --get user.name || true)
     [ -z "$want" ] || [ "$(git config --global --get user.name)" = "$want" ]'
 
+# credential sections are the one thing that does not travel, so they come off the host side of
+# this comparison. The check below drives that removal with a source of its own.
 check "sections are copied verbatim, filters included" bash -c '
-    diff <(tail -n +2 "$HOME/.config/git/config" | grep "^\[") <(grep "^\[" /mnt/git-config/config)'
+    diff <(tail -n +2 "$HOME/.config/git/config" | grep "^\[") \
+         <(grep "^\[" /mnt/git-config/config | grep -Ev "^\[credential( |\])")'
+
+check "no credential section reaches the container" bash -c '
+    ! grep -qE "^\[credential( |\])" "$HOME/.config/git/config"'
 
 check "git honors the copied excludes" bash -c '
     v=$(git config --global --get core.excludesfile || true)
@@ -58,6 +64,29 @@ check "unsets keys naming a program this container lacks, keeps the rest" bash -
     # The lfs filter is deliberately left in place: its failure is the signal to install git-lfs.
     [ "$(g filter.lfs.required)" = true ] || { echo "lfs filter was stripped"; exit 1; }
     echo "$out" | grep -q "definitely-not-installed-xyz is not installed" || { echo "no reason given"; exit 1; }
+    exit 0'
+
+# Also driven with a synthetic source: a host config carries helpers this container cannot run --
+# a stale /tmp/vscode-remote-containers-<uuid>.js path the VS Code extension left in the host's
+# global config, and a helper naming a program of the host such as gh.
+check "drops every credential section, keeps the rest" bash -c '
+    src=$(mktemp -d); home=$(mktemp -d)
+    printf "%s\n" \
+        "[credential]" \
+        "	helper = !/tmp/vscode-remote-containers-dead.js git-credential-helper" \
+        "	useHttpPath = true" \
+        "[credential \"https://github.com\"]" \
+        "	helper = !/usr/bin/gh auth git-credential" \
+        "[user]" \
+        "	name = Synthetic" > "$src/config"
+    out=$(GIT_CONFIG_SOURCE_DIR="$src" HOME="$home" /usr/local/share/devcontainer/git-config/post-create.sh 2>&1)
+    g() { HOME="$home" git config --global --get "$1" 2>/dev/null || true; }
+    [ -z "$(g credential.helper)" ]      || { echo "credential.helper survived"; exit 1; }
+    [ -z "$(g credential.useHttpPath)" ] || { echo "credential.useHttpPath survived"; exit 1; }
+    [ -z "$(g "credential.https://github.com.helper")" ] || { echo "subsection survived"; exit 1; }
+    grep -qi credential "$home/.config/git/config" && { echo "credential text left in the file"; exit 1; }
+    [ "$(g user.name)" = Synthetic ] || { echo "unrelated config lost"; exit 1; }
+    echo "$out" | grep -q "dropped \[credential\]" || { echo "no reason given"; exit 1; }
     exit 0'
 
 # The regression check for the readonly flag smuggled through the mount target. Read from
