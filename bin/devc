@@ -7,9 +7,16 @@ writes the result to `.devcontainer/local/devcontainer.json`, and adds
 
 With no override file present, it runs the real CLI unchanged.
 
-Two subcommands belong to devc, and neither one starts the real CLI:
+Four subcommands belong to devc, and none of them starts the real CLI:
   merge   writes the generated config, and reports what it did.
   merged  prints the generated config, and writes nothing.
+  stop    stops the container that belongs to this workspace and config.
+  down    stops it and removes it, with the rest of its compose project.
+
+`stop` and `down` find the container by the two labels the CLI stamps on it, so one
+lookup covers an image, a Dockerfile and a compose config alike. `--all-configs`
+widens the match to every container of the workspace, and `down --volumes` also
+removes the named volumes of a compose project.
 
 `--local-config NAME` uses `devcontainer.NAME.json` and the directory `.devcontainer/NAME/`
 instead. The default name is `local`. The flag belongs to devc, and the real CLI never sees it.
@@ -55,9 +62,12 @@ CONFIG_SUBCOMMANDS = {
     "upgrade",
 }
 
+# Subcommands that belong to devc. None of them reaches the real CLI.
+DEVC_SUBCOMMANDS = {"merge", "merged", "stop", "down"}
+
 # Every other subcommand, so that a flag written before the subcommand cannot be
-# mistaken for one. `merge` and `merged` belong to devc and never reach the real CLI.
-OTHER_SUBCOMMANDS = {"features", "templates", "merge", "merged"}
+# mistaken for one.
+OTHER_SUBCOMMANDS = {"features", "templates"} | DEVC_SUBCOMMANDS
 
 # Flags that take a value, and that someone may write before the subcommand.
 VALUE_FLAGS = {"--workspace-folder", "--config", "--override-config", "--log-level", "--log-format"}
@@ -295,11 +305,16 @@ def write_if_changed(path: str, content: str) -> bool:
     return True
 
 
+def output_path(workspace: str, name: str) -> str:
+    """Return the path of the generated config, whether or not it exists yet."""
+    return os.path.join(workspace, ".devcontainer", name, OUTPUT_NAME)
+
+
 def build_config(workspace: str, base_path: "str | None", override_path: str,
                  name: str) -> "tuple[str, str, str]":
     """Return (output path, merged JSON, whole file content). This writes nothing."""
-    out_dir = os.path.join(workspace, ".devcontainer", name)
-    out_path = os.path.join(out_dir, OUTPUT_NAME)
+    out_path = output_path(workspace, name)
+    out_dir = os.path.dirname(out_path)
 
     source_dir = os.path.dirname(base_path or override_path)
     prefix = os.path.relpath(source_dir, out_dir).replace(os.sep, "/")
@@ -348,6 +363,149 @@ def warn_if_committable(workspace: str, override_path: str, name: str) -> None:
         warn(f"{shown} is not ignored by git. Add '*.{name}.json' to .gitignore.")
 
 
+# ---------------------------------------------------------------------- docker
+
+# The two labels the CLI stamps on the container it creates. The compose path writes
+# the same pair into its generated override file, so this one lookup finds the
+# container of an image config, a Dockerfile config and a compose config alike.
+LABEL_FOLDER = "devcontainer.local_folder"
+LABEL_CONFIG = "devcontainer.config_file"
+
+# Compose puts the project on every container it owns. Its presence is what tells
+# the two container kinds apart after the fact.
+COMPOSE_PROJECT = "com.docker.compose.project"
+
+
+def docker_cli() -> "list[str]":
+    """Return the command that talks to the container engine."""
+    override = os.environ.get("DEVC_DOCKER")
+    if override:
+        # A path wins as it stands, so a directory name with a space still works.
+        return [override] if os.path.exists(override) else shlex.split(override)
+    for name in ("docker", "podman"):
+        found = shutil.which(name)
+        if found:
+            return [found]
+    die("cannot find docker or podman on PATH. Set DEVC_DOCKER.")
+
+
+def compose_cli(docker: "list[str]") -> "list[str]":
+    """Return the command that drives compose. The engine's own subcommand wins."""
+    if quiet(docker + ["compose", "version"]) == 0:
+        return docker + ["compose"]
+    for name in ("docker-compose", "podman-compose"):
+        found = shutil.which(name)
+        if found:
+            return [found]
+    die("cannot find `docker compose` or docker-compose. Install one of them.")
+
+
+def quiet(command: "list[str]") -> int:
+    """Run a command, hide its output, and return its exit code."""
+    try:
+        return subprocess.run(
+            command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        ).returncode
+    except OSError as error:
+        die(f"cannot run {command[0]}: {error.strerror}")
+
+
+def capture(command: "list[str]") -> str:
+    try:
+        result = subprocess.run(command, capture_output=True, text=True)
+    except OSError as error:
+        die(f"cannot run {command[0]}: {error.strerror}")
+    if result.returncode != 0:
+        die(f"{command[0]} failed: {result.stderr.strip() or result.returncode}")
+    return result.stdout
+
+
+def show(command: "list[str]") -> int:
+    """Run a command with its output on the terminal, and return its exit code."""
+    try:
+        return subprocess.run(command).returncode
+    except OSError as error:
+        die(f"cannot run {command[0]}: {error.strerror}")
+
+
+def find_containers(docker: "list[str]", workspace: str,
+                    config_path: "str | None") -> "list[str]":
+    """Return the ids of the containers the CLI created for this workspace."""
+    command = docker + ["ps", "-aq", "--filter", f"label={LABEL_FOLDER}={workspace}"]
+    if config_path:
+        command += ["--filter", f"label={LABEL_CONFIG}={config_path}"]
+    return capture(command).split()
+
+
+def container_labels(docker: "list[str]", container: str) -> dict:
+    raw = capture(docker + ["inspect", "-f", "{{json .Config.Labels}}", container]).strip()
+    try:
+        return json.loads(raw) or {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def say(message: str) -> None:
+    print(f"{MAGENTA}{PROG}{RESET}: {message}", flush=True)
+
+
+def report_nothing(docker: "list[str]", workspace: str, config_path: str,
+                   all_configs: bool) -> None:
+    """Explain an empty match, and name the configs the workspace does have."""
+    others = [] if all_configs else find_containers(docker, workspace, None)
+    if not others:
+        say(f"No container for {CYAN}{config_path}{RESET}")
+        return
+    configs = sorted({container_labels(docker, c).get(LABEL_CONFIG, "?") for c in others})
+    warn(f"no container for {config_path}. This workspace has containers from:")
+    for item in configs:
+        warn(f"  {item}")
+    warn("Name one with --local-config NAME or --config PATH, or use --all-configs.")
+    raise SystemExit(1)
+
+
+def stop_or_down(subcommand: str, workspace: str, config_path: str,
+                 all_configs: bool, remove_volumes: bool) -> None:
+    """Stop the container of this workspace, and remove it where `down` asks."""
+    docker = docker_cli()
+    containers = find_containers(docker, workspace, None if all_configs else config_path)
+    if not containers:
+        report_nothing(docker, workspace, config_path, all_configs)
+        return
+
+    # A compose container is handled through compose and by project, because the other
+    # services of the project exist to serve it. `docker compose -p NAME down` needs no
+    # compose file, so a generated override that is already gone costs nothing here.
+    projects: "list[str]" = []
+    plain: "list[str]" = []
+    for container in containers:
+        project = container_labels(docker, container).get(COMPOSE_PROJECT)
+        if not project:
+            plain.append(container)
+        elif project not in projects:
+            projects.append(project)
+
+    verb = "Stopping" if subcommand == "stop" else "Removing"
+    failed = 0
+
+    if projects:
+        compose = compose_cli(docker)
+        action = ["stop"] if subcommand == "stop" else ["down"]
+        if remove_volumes:
+            action.append("--volumes")
+        for project in projects:
+            say(f"{verb} compose project {BOLD}{CYAN}{project}{RESET}")
+            failed += bool(show(compose + ["-p", project] + action))
+
+    if plain:
+        action = ["stop"] if subcommand == "stop" else ["rm", "-f"]
+        say(f"{verb} container {BOLD}{CYAN}{' '.join(plain)}{RESET}")
+        failed += bool(show(docker + action + plain))
+
+    if failed:
+        raise SystemExit(1)
+
+
 # ------------------------------------------------------------------------ args
 
 def take_flag(args: "list[str]", flag: str) -> "str | None":
@@ -371,6 +529,13 @@ def take_flag(args: "list[str]", flag: str) -> "str | None":
         index += 1
     args[:] = kept
     return value
+
+
+def take_switch(args: "list[str]", *names: str) -> bool:
+    """Remove a devc switch from `args`. Return True where it was there."""
+    found = any(arg in names for arg in args)
+    args[:] = [arg for arg in args if arg not in names]
+    return found
 
 
 def check_name(name: str) -> str:
@@ -444,6 +609,31 @@ def main(argv: "list[str]") -> None:
     index = find_subcommand(args)
     subcommand = args[index] if index is not None else None
     base_path, override_path = find_configs(workspace, name)
+
+    # `stop` and `down` belong to devc. They talk to the engine and not to the CLI.
+    if subcommand in ("stop", "down"):
+        rest = args[:index] + args[index + 1:]
+        all_configs = take_switch(rest, "--all-configs")
+        remove_volumes = take_switch(rest, "--volumes", "-v")
+        given = take_flag(rest, "--config")
+        take_flag(rest, "--workspace-folder")
+        if rest:
+            die(f"{subcommand} does not take {rest[0]}")
+        if remove_volumes and subcommand == "stop":
+            die("--volumes belongs to down, not to stop")
+
+        # The label holds the config the container was created from, which is the
+        # generated file wherever an override exists.
+        if given:
+            config_path = os.path.abspath(given)
+        elif override_path:
+            config_path = output_path(workspace, name)
+        elif base_path:
+            config_path = base_path
+        else:
+            die(f"no devcontainer.json in {workspace}")
+        stop_or_down(subcommand, workspace, config_path, all_configs, remove_volumes)
+        return
 
     # `merge` and `merged` belong to devc. Neither one starts the real CLI.
     if subcommand in ("merge", "merged"):

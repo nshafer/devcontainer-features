@@ -165,6 +165,42 @@ devc --local-config ci build   # .devcontainer/devcontainer.ci.json  -> .devcont
 The name has to stay a single directory name. A `/` in it, or a leading `.`, stops the run.
 Everything else works the same, the git warning included, which then names `*.gpu.json`.
 
+### Stop and remove the container
+
+The CLI has no `stop` and no `down`. The [pull request that adds
+them](https://github.com/devcontainers/cli/pull/1041) is still open, so `devc` does it instead:
+
+```bash
+devc stop     # stop the container, and keep it
+devc down     # stop it and remove it
+```
+
+Neither one starts the real CLI. `devc` asks the engine directly, because the engine already knows
+which container belongs to this folder. `devcontainer up` stamps every container it creates with
+`devcontainer.local_folder` and `devcontainer.config_file`, and the compose path writes the same
+pair into the override file it generates. One lookup therefore covers an `image` config, a
+Dockerfile config and a compose config alike.
+
+What it runs depends on the container it finds:
+
+| Config | `devc stop` | `devc down` |
+| --- | --- | --- |
+| `image` or `build` | `docker stop` | `docker rm -f` |
+| `dockerComposeFile` | `docker compose -p NAME stop` | `docker compose -p NAME down` |
+
+The project name comes from the container's own `com.docker.compose.project` label, so `devc` never
+guesses it, and `docker compose -p NAME down` needs no compose file on disk. `down` takes the whole
+project and not the one service, because the other services in it exist to serve the dev container.
+It keeps the named volumes unless you ask for `devc down --volumes`.
+
+The match is exact, and the config file is part of it, so `devc --local-config gpu down` removes the
+`gpu` container and leaves the `local` one alone. Where the match is empty and the folder does have
+containers from another config, `devc` names those and removes nothing. `--all-configs` widens the
+match to every container of the workspace folder.
+
+`DEVC_DOCKER` names the engine, in the way `DEVCONTAINER_CLI` names the CLI. Without it, `devc`
+takes `docker`, then `podman`, from `PATH`.
+
 ### What devc passes straight through
 
 `devc` runs the real CLI unchanged, with no merge, in three cases: no override file exists, you
