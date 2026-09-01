@@ -37,7 +37,7 @@ USER_HOME=/root
 # shellcheck source=/dev/null
 [ -r "$CONFIG" ] && . "$CONFIG"
 
-GLOBAL_LIST="${EGRESS_GLOBAL_LIST:-/mnt/egress-filter/allowlist.txt}"  # read-only mount
+GLOBAL_LIST="${EGRESS_GLOBAL_LIST:-/mnt/egress-filter/allowlist.txt}"  # a mount you declare yourself
 # What to *print* for the global list. The container path is where it is mounted, which is no help
 # to the person who has to edit it -- they can only reach it from the other side of the mount. The
 # status output names the file they can actually open.
@@ -165,8 +165,12 @@ build_list() {
     if [ -r "$GLOBAL_LIST" ]; then
         add_source "global: $GLOBAL_LIST_HOST (on your machine; mounted at $GLOBAL_LIST)" "$GLOBAL_LIST"
         echo "global:   $GLOBAL_LIST_HOST (on your machine)" >> "$SOURCES_FILE"
-    else
+    elif [ -d "$(dirname "$GLOBAL_LIST")" ]; then
         echo "global:   $GLOBAL_LIST_HOST (on your machine -- no file there yet)" >> "$SOURCES_FILE"
+    else
+        # The mount itself is absent, which is a different problem from an empty list and has a
+        # different fix. `egress-status` prints this line, so name the cause there too.
+        echo "global:   NOT MOUNTED -- add the mount to your own config" >> "$SOURCES_FILE"
     fi
 
     # A glob, because a feature's entrypoint is never told the workspace folder -- it runs before
@@ -656,9 +660,14 @@ status() {
 
 # Watches the global list, and *only* the global list. This is the part to be careful about.
 #
-# The global list is a read-only bind mount of a file on the host. Nothing in the container can
-# write it, so re-reading it whenever it changes is safe: the only party who can change it is the
-# person at the keyboard, outside the container, and they get the change applied live.
+# The global list is a bind mount of a file on the host, and it has to be read-only. Nothing in the
+# container can write a read-only mount, so re-reading it whenever it changes is safe: the only
+# party who can change it is the person at the keyboard, outside the container, and they get the
+# change applied live.
+#
+# This feature cannot declare that mount itself, so it cannot enforce the flag either -- see the
+# mount note in NOTES.md. check_global_mount below warns at container start when the mount is
+# read-write, because the watcher here does not know the difference and applies whatever it reads.
 #
 # The project list is the opposite. It lives in the repo, which the container's user can write, so
 # anything that re-read it on change would hand the agent a way to widen its own allowlist -- write
@@ -725,6 +734,49 @@ EOF
     log "agent notes installed at $dir/SKILL.md"
 }
 
+# The global list arrives on a mount this feature asks for and does not declare. Two things can be
+# wrong with it, they have different fixes, so they get different warnings. Neither one is fatal:
+# the baseline, the presets, the project list and the options all still apply, and a filter that
+# refuses to start over a shorter allowlist is a filter people turn off.
+#
+# Read /proc/mounts rather than trying a write. A probe write on a read-write mount would land in
+# the host's own config directory, which is the thing this check exists to protect.
+#
+# SC2016: the single quotes are the point. ${localEnv:HOME} is devcontainer.json syntax and ${HOME}
+# is compose syntax, and both are meant to reach the reader unexpanded, exactly as they type them.
+# shellcheck disable=SC2016
+check_global_mount() {
+    local dir opts
+    dir="$(dirname "$GLOBAL_LIST")"
+
+    if [ ! -d "$dir" ]; then
+        warn "$dir is not mounted, so the global allowlist is not in effect."
+        warn "  This feature does not declare the mount. Add it to your own config:"
+        warn "    devcontainer.json, for a single container:"
+        warn '      "mounts": ["type=bind,src=${localEnv:HOME}/.config/egress-filter,dst=/mnt/egress-filter,readonly"]'
+        warn "    docker-compose.yml, for a compose project (readonly is dropped in devcontainer.json there):"
+        warn '      volumes: ["${HOME}/.config/egress-filter:/mnt/egress-filter:ro"]'
+        warn "  https://github.com/nshafer/devcontainer-features/tree/main/src/egress-filter"
+        return 0
+    fi
+
+    opts="$(awk -v d="$dir" -v f="$GLOBAL_LIST" '$2 == d || $2 == f { print $4 }' /proc/mounts | tail -n1)"
+    case ",${opts:-none}," in
+        *,ro,*)
+            ;;
+        ,none,)
+            warn "$dir exists but nothing is mounted there, so the global allowlist is yours only"
+            warn "  in name. Mount the host directory over it -- see the feature's README."
+            ;;
+        *)
+            warn "$dir is mounted READ-WRITE, so this container's own user can widen the global"
+            warn "  allowlist, and the watcher applies the change within two seconds. The live"
+            warn "  re-read is only safe on a read-only mount. Add readonly to the mount string in"
+            warn "  devcontainer.json, or :ro to the volume in docker-compose.yml."
+            ;;
+    esac
+}
+
 up() {
     for tool in tinyproxy iptables; do
         command -v "$tool" >/dev/null 2>&1 || {
@@ -733,6 +785,7 @@ up() {
             return 1
         }
     done
+    check_global_mount
     build_list
     write_proxy_conf
     start_proxy || return 1

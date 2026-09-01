@@ -46,9 +46,11 @@ jobs:
       - name: Install the devcontainer CLI
         run: npm install -g @devcontainers/cli
 
-      # git-config and egress-filter bind-mount host paths, and a bind mount whose source is
-      # missing stops the container from starting outright — Docker does not create it. A runner
-      # has neither directory. (claude mounts nothing; it seeds settings from its option.)
+      # git-config and egress-filter read host paths from a mount the *config* declares, not the
+      # feature -- so the mounted scenarios in test/ declare one, the same way a user does. A bind
+      # mount whose source is missing stops the container from starting outright — Docker does not
+      # create it. A runner has neither directory. (claude mounts nothing; it seeds settings from
+      # its option.)
       - name: Create host config paths
         run: |
           mkdir -p ~/.config/git ~/.config/egress-filter

@@ -62,8 +62,18 @@
     "NO_PROXY": "localhost,127.0.0.1,::1"
   },
 
-  // The host paths the harness mounts into every test container. A bind mount whose source does not
-  // exist stops the container from starting, and inside here "the host" is this container.
+  // git-config and egress-filter declare no mounts of their own -- a feature's mount metadata has
+  // no read-only field, and every workaround for that depends on how the container is built. So the
+  // mounts are here, in the config, which is where they belong. See the Host setup section of the
+  // README.
+  "mounts": [
+    "type=bind,src=${localEnv:HOME}/.config/git,dst=/mnt/git-config,readonly",
+    "type=bind,src=${localEnv:HOME}/.config/egress-filter,dst=/mnt/egress-filter,readonly"
+  ],
+
+  // The host paths above, and the ones the harness mounts into every test container. A bind mount
+  // whose source does not exist stops the container from starting, and inside here "the host" is
+  // this container.
   "postCreateCommand": "make setup",
 
   "customizations": {

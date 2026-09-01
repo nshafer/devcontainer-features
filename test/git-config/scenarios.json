@@ -1,0 +1,12 @@
+{
+  "mounted": {
+    "image": "node",
+    "remoteUser": "node",
+    "mounts": [
+      "type=bind,src=${localEnv:HOME}/.config/git,dst=/mnt/git-config,readonly"
+    ],
+    "features": {
+      "git-config": {}
+    }
+  }
+}

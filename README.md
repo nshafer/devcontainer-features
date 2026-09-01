@@ -5,8 +5,8 @@ Claude setup, git config files, persisted home directory, egress filter, sandbox
 bridge, so I do not copy-paste them into every project's `devcontainer.json`.
 
 Each feature has its own generated README with the full notes and options. This file covers the
-features as a whole, the setup, and the one-time host setup. For a feature's own detail, follow its
-link:
+features as a whole, the host setup, and the ways to use them. For a feature's own detail, follow
+its link:
 
 | Feature                                  | What it does                                                                                      |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------- |
@@ -16,6 +16,124 @@ link:
 | [`egress-filter`](src/egress-filter)     | Default-deny outbound networking with a hostname allowlist, enforced in-container.                 |
 | [`claude`](src/claude)                   | Installs the Claude Code CLI at build time.                                                        |
 | [`tidewave`](src/tidewave)               | Installs the Tidewave CLI and starts it on every container start.                                 |
+
+## Host setup
+
+Two features read a directory from your host home directory, and **neither one declares the mount**.
+You do, in your own config. So the setup has two parts: a directory to create once per machine, and
+a mount to add to every project that uses the feature.
+
+The mount is yours because a feature cannot declare a read-only one. A feature's mount metadata is
+an object with `source`, `target` and `type`, and that object has no field for the flag. Every way
+around it depends on how the container is built: the `docker run` path takes an option on the end of
+a mount string, and a compose project renders each mount as `<source>:<target>` and drops it. A
+feature-declared mount would promise read-only and hand half its users a writable mount of their own
+config directory. Both features warn at container start when the mount is not there.
+
+**A bind mount whose source does not exist stops the container from starting.** Docker does not
+create it; that is `-v` behaviour, not `--mount`. So create the directory before you add the mount.
+
+### git-config
+
+Create the directory, once per machine:
+
+```bash
+mkdir -p ~/.config/git
+```
+
+Git has two global config locations, and they are not additive. **If `~/.gitconfig` exists,
+`~/.config/git/config` is ignored entirely**, so an empty `~/.gitconfig` created to satisfy a mount
+would silently switch off the whole configuration of an XDG setup. Measured, not assumed. This
+feature reads the XDG location only. If your global config lives in `~/.gitconfig`, move it:
+
+```bash
+mkdir -p ~/.config/git && mv ~/.gitconfig ~/.config/git/config
+```
+
+Then add the mount to the project. In `.devcontainer/devcontainer.json`:
+
+```jsonc
+"mounts": [
+  "type=bind,src=${localEnv:HOME}/.config/git,dst=/mnt/git-config,readonly"
+]
+```
+
+In a compose project, in the service in `docker-compose.yml`:
+
+```yaml
+services:
+  app:
+    volumes:
+      - ${HOME}/.config/git:/mnt/git-config:ro
+```
+
+### egress-filter
+
+Create the directory and the global list, once per machine:
+
+```bash
+mkdir -p ~/.config/egress-filter
+touch ~/.config/egress-filter/allowlist.txt
+```
+
+The directory is the mount source, so only the directory has to exist. The file is the global
+allowlist, and an empty one is fine.
+
+Then add the mount to the project, the same two ways:
+
+```jsonc
+"mounts": [
+  "type=bind,src=${localEnv:HOME}/.config/egress-filter,dst=/mnt/egress-filter,readonly"
+]
+```
+
+```yaml
+services:
+  app:
+    volumes:
+      - ${HOME}/.config/egress-filter:/mnt/egress-filter:ro
+```
+
+**Keep this one read-only.** The global list is re-read while the container runs, and that is safe
+only because nothing inside the container can write it. `egress-filter` warns when the mount is
+read-write, and `egress-status` says `global: NOT MOUNTED` when it is missing.
+
+### In a compose project, put the mount in the compose file
+
+Not in `devcontainer.json`. The CLI renders every `devcontainer.json` mount into its compose
+override file as `<source>:<target>`, the short volume syntax, which has no place for `readonly`. A
+`:ro` entry of your own in `devcontainer.json` does not survive either: compose merges volumes by
+target path and the override file comes last, so the override wins.
+
+### tidewave
+
+`tidewave` mounts nothing, but a feature cannot open a port or read the host's home path. So set
+`TIDEWAVE_HOST_PATH` on the host, and add `appPort` and `remoteEnv` to the project config. See [its
+notes](src/tidewave).
+
+### claude, persist-homedir, sandbox
+
+These need no host filesystem setup. `sandbox` has recommended host *settings* that fully close the
+forwarded channels — unforwarding the sockets and turning off the Wayland mount. See [its
+notes](src/sandbox).
+
+### Rootless Docker and Podman
+
+`egress-filter` needs the host to load five kernel modules. A rootless container cannot load one
+itself, and a Podman host often never used netfilter at all:
+
+```bash
+printf '%s\n' ip_tables iptable_filter xt_conntrack xt_owner ipt_REJECT \
+  | sudo tee /etc/modules-load.d/devcontainer-egress.conf
+sudo systemctl restart systemd-modules-load
+```
+
+Under Podman, also set `localNetworks` yourself. `pasta` copies the host routes into the container,
+so `auto` would open your LAN. Under SELinux, relabel the two mounted directories.
+
+Both steps are in [the egress-filter notes](src/egress-filter#rootless-docker-and-podman), with what
+a missing module looks like. `sandbox` holds unchanged. [Its notes](src/sandbox#rootless-docker-and-podman)
+say why, and what to check under `--userns=keep-id`.
 
 ## Use per-project
 
@@ -34,11 +152,18 @@ everywhere. The standalone `devcontainer` CLI reads the config and nothing else,
     "ghcr.io/devcontainers/features/common-utils:2": { "username": "devc" },
 
     "ghcr.io/nshafer/devcontainer-features/claude:1": {},
-    "ghcr.io/nshafer/devcontainer-features/git-config:1": {},
+    "ghcr.io/nshafer/devcontainer-features/git-config:2": {},
     "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {},
     "ghcr.io/nshafer/devcontainer-features/sandbox:2": {},
-    "ghcr.io/nshafer/devcontainer-features/egress-filter:1": {},
-  }
+    "ghcr.io/nshafer/devcontainer-features/egress-filter:2": {},
+  },
+
+  // git-config and egress-filter read a mount that you declare and they do not. See Host setup
+  // above, and put these in docker-compose.yml instead if the project is a compose project.
+  "mounts": [
+    "type=bind,src=${localEnv:HOME}/.config/git,dst=/mnt/git-config,readonly",
+    "type=bind,src=${localEnv:HOME}/.config/egress-filter,dst=/mnt/egress-filter,readonly"
+  ]
 }
 ```
 
@@ -112,7 +237,7 @@ are allowed, as in any `devcontainer.json`:
     "ghcr.io/devcontainers/features/common-utils:2": { "username": "devc" },
     "ghcr.io/nshafer/devcontainer-features/sandbox:2": {},
     "ghcr.io/nshafer/devcontainer-features/claude:1": {},
-    "ghcr.io/nshafer/devcontainer-features/git-config:1": {},
+    "ghcr.io/nshafer/devcontainer-features/git-config:2": {},
     "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {}
   },
 
@@ -229,7 +354,7 @@ Another option with VS Code is to use the "Default Features" setting to use feat
 ```jsonc
 "dev.containers.defaultFeatures": {
   "ghcr.io/nshafer/devcontainer-features/claude:1": {},
-  "ghcr.io/nshafer/devcontainer-features/git-config:1": {},
+  "ghcr.io/nshafer/devcontainer-features/git-config:2": {},
   "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {}
 }
 ```
@@ -247,78 +372,15 @@ break things. Signing commits, `git push` over SSH, `code .` from the container 
 your desktop and **`sudo`** all stop working inside any container that has it. That is the trade it
 exists to make, and it belongs in the containers that run an agent rather than in all of them.
 
+`git-config` is in that list, and it still needs its mount in each project. The setting adds
+features and cannot add a mount, so in a project without one the feature installs, warns on
+`postCreate` that it copied nothing, and changes nothing else. Add the mount to the projects where
+you want your git config.
+
 Two things to know about that setting. The Dev Containers VS Code extension contributes it, so the
 standalone `devcontainer` CLI ignores it — containers created with `devcontainer up` need the
 features listed in the config. And a project that declares the same feature id itself wins, which is
 how a project opts out or pins options.
-
-## One-time host setup
-
-Two features bind-mount paths from the host home directory, and **a bind mount whose source does not
-exist stops the container from starting**. Docker does not create it; that is `-v` behaviour, not
-`--mount`. So set up each feature you use, once per machine. The steps are split by feature, so you
-run only the ones you need.
-
-### git-config
-
-`git-config` mounts `~/.config/git`, read-only. Create the directory:
-
-```bash
-mkdir -p ~/.config/git
-```
-
-Git has two global config locations, and they are not additive. **If `~/.gitconfig` exists,
-`~/.config/git/config` is ignored entirely**, so an empty `~/.gitconfig` created to satisfy a mount
-would silently switch off the whole configuration of an XDG setup. Measured, not assumed. This
-feature reads the XDG location only. If your global config lives in `~/.gitconfig`, move it:
-
-```bash
-mkdir -p ~/.config/git && mv ~/.gitconfig ~/.config/git/config
-```
-
-### egress-filter
-
-`egress-filter` mounts `~/.config/egress-filter`, read-only. Create the directory and the global
-list:
-
-```bash
-mkdir -p ~/.config/egress-filter
-touch ~/.config/egress-filter/allowlist.txt
-```
-
-The directory is the mount source, so only the directory has to exist. The file is the global
-allowlist, and an empty one is fine.
-
-### tidewave
-
-`tidewave` mounts nothing, but a feature cannot open a port or read the host's home path. So set
-`TIDEWAVE_HOST_PATH` on the host, and add `appPort` and `remoteEnv` to the project config. See [its
-notes](src/tidewave).
-
-### claude, persist-homedir, sandbox
-
-These need no host filesystem setup. `sandbox` has recommended host *settings* that fully close the
-forwarded channels — unforwarding the sockets and turning off the Wayland mount. See [its
-notes](src/sandbox).
-
-### Rootless Docker and Podman
-
-Five of the six features need nothing extra. `egress-filter` needs the host to load five kernel
-modules. A rootless container cannot load one itself, and a Podman host often never used netfilter
-at all:
-
-```bash
-printf '%s\n' ip_tables iptable_filter xt_conntrack xt_owner ipt_REJECT \
-  | sudo tee /etc/modules-load.d/devcontainer-egress.conf
-sudo systemctl restart systemd-modules-load
-```
-
-Under Podman, also set `localNetworks` yourself. `pasta` copies the host routes into the container,
-so `auto` would open your LAN. Under SELinux, relabel the two mounted directories.
-
-Both steps are in [the egress-filter notes](src/egress-filter#rootless-docker-and-podman), with what
-a missing module looks like. `sandbox` holds unchanged. [Its notes](src/sandbox#rootless-docker-and-podman)
-say why, and what to check under `--userns=keep-id`.
 
 ## Publishing
 
@@ -345,11 +407,11 @@ outside `.devcontainer/`, so `"../src/claude"` fails with *"Resolved path must b
 has no job to do: the CLI copies each feature from a temp directory of its own.
 
 **The Docker daemon is inside the container, not on the host.** `devcontainer features test` needs
-Docker, and it needs Docker to see *this* container's filesystem. The harness applies every feature's
-mounts, and those name paths under the home directory of whoever runs the test.
-Docker-outside-of-docker would resolve them against the host home directory instead. So the config
-adds `docker-in-docker`, and `postCreateCommand` runs `make setup` to create the paths the mounts
-expect — the same one-time setup as on a host, for the same reason. It carries one option:
+Docker, and it needs Docker to see *this* container's filesystem. The mounted scenarios name paths
+under the home directory of whoever runs the test, and docker-outside-of-docker would resolve them
+against the host home directory instead. So the config adds `docker-in-docker`, and
+`postCreateCommand` runs `make setup` to create the paths those mounts expect — the same host setup
+as on a machine, for the same reason. It carries one option:
 `"moby": false`. The base image is on Debian trixie, which has no `moby-cli` package, and the
 feature stops the build rather than falling back to Docker CE on its own.
 
@@ -391,7 +453,7 @@ child process and never clears it, so the inner dockerd carries it, and so does 
 test harness starts. A setuid binary cannot run there, and `sudo` is setuid. The `egress-filter`
 tests are the only ones that wanted root — to read the iptables chain, and to rebuild the allowlist
 the way a restart would. Those checks live in scenarios whose `remoteUser` is `root`: `strict`,
-`presets`, `pinned-dns`, and `privileged`. `test/egress-filter/test.sh` keeps every check a non-root
+`presets`, `pinned-dns`, `privileged`, and `mounted-global`. `test/egress-filter/test.sh` keeps every check a non-root
 process can prove, which is the half that says what the person and the agent can actually see. Root
 is not exempt from the filter — only the proxy uid is — so a root scenario still measures the
 filter. The whole suite passes here and on a host.
@@ -408,8 +470,8 @@ make test       # all of them, as CI runs them
 ```
 
 The `Makefile` exists because every run needs the same three things set right — the right CLI, a base
-image the feature can run on, and the host paths its mounts expect — and none of them are the
-default. `QUICK=1` skips scenarios for an edit-run loop, `FILTER=<name>` narrows to one scenario, and
+image the feature can run on, and the host paths the mounted scenarios expect — and none of them are
+the default. `QUICK=1` skips scenarios for an edit-run loop, `FILTER=<name>` narrows to one scenario, and
 `ARGS=` passes anything else through.
 
 `make lint` runs shellcheck, `bash -n` and a JSON parse in a couple of seconds without starting a
@@ -430,8 +492,10 @@ npx @devcontainers/cli features test -f claude -i node -u node .
 
 `-i`/`-u` are not optional in spirit: `claude`, `git-config` and `persist-homedir` key off the remote
 user's home directory, and the harness default (`ubuntu:focal`, running as root) exercises none of
-the interesting paths. The host paths from the one-time setup above have to exist, since the harness
-applies each feature's mounts.
+the interesting paths. The host paths from [Host setup](#host-setup) have to exist too, because two
+scenarios mount them: `git-config`'s `mounted` and `egress-filter`'s `mounted-global`. No feature
+declares a mount of its own, so those two scenarios are where a real mount is tested, and they
+declare it the way you do in a project.
 
 `sandbox` is the exception to `-i node`: its tests have to become root to check what the *remote
 user* can no longer reach, and the plain `node` image has no `sudo`. CI gives it a devcontainers base
@@ -456,20 +520,29 @@ A feature's `mounts` are static metadata. The CLI substitutes them for `${localE
 and **not** for `${containerEnv:HOME}` — that one passes to `docker run` verbatim and fails the
 container. Two things follow.
 
-**A feature cannot mount anything at the remote user's home directory**, because it cannot know the
-username: projects use `node`, `vscode`, `devc` and per-project names. Each feature mounts at a fixed
-path instead, then reaches it from the home directory by a mechanism that _is_ username-aware,
-because `install.sh` runs with `_REMOTE_USER` and `_REMOTE_USER_HOME` set.
+**Nothing can be mounted at the remote user's home directory**, because a feature cannot know the
+username: projects use `node`, `vscode`, `devc` and per-project names. Each feature uses a fixed path
+instead, then reaches it from the home directory by a mechanism that _is_ username-aware, because
+`install.sh` runs with `_REMOTE_USER` and `_REMOTE_USER_HOME` set.
 
-| Feature           | Fixed mount point                        | How `$HOME` reaches it                                      |
+| Feature           | Fixed path                               | How `$HOME` reaches it                                      |
 | ----------------- | ---------------------------------------- | ----------------------------------------------------------- |
 | `git-config`      | `/mnt/git-config`                        | files copied into `$HOME` at postCreate                     |
 | `egress-filter`   | `/mnt/egress-filter`                     | read at container start; nothing is copied into `$HOME`     |
 | `persist-homedir` | `/home` (the parent, not the user's dir) | nothing needed — mounting the parent sidesteps the username |
 
+**A feature's mount cannot be read-only.** The `mounts` metadata is an object with `source`, `target`
+and `type`, and it has no field for the flag. Every way around it depends on how the container is
+built: the `docker run` path renders a mount as `--mount type=<type>,src=<source>,dst=<target>`, so
+an option on the end of a mount string reaches docker, while a compose project renders each mount as
+`<source>:<target>` into an override file and drops it. No single mount value is read-only in both
+modes. So from version 2 on, `git-config` and `egress-filter` declare no mounts at all. They read
+the fixed path above, and you declare the mount that fills it — see [Host setup](#host-setup).
+`persist-homedir` is unaffected, because its volume is meant to be writable.
+
 **A mount cannot depend on an option.** Options cannot add or remove a mount, so every path a feature
-mounts must exist on every machine that uses it — which is why `git-config` mounts a small fixed set
-of git paths and asks you to create them once, rather than offering a configurable list.
+does mount must exist on every machine that uses it — which is why `persist-homedir` names a volume
+rather than offering a configurable list of paths.
 
 `containerEnv` is more limited still. The CLI emits it as a Dockerfile `ENV`, where it does not
 substitute `${localEnv:HOME}` at all — Docker rejects it as an unsupported modifier — so a feature

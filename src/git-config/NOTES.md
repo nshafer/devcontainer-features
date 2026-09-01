@@ -1,8 +1,8 @@
 ## Host setup
 
-This feature bind-mounts `~/.config/git` from the host, read-only. A bind mount whose source does
-not exist stops the container from starting. Docker does not create it. So create the directory on
-every machine that uses this feature:
+Two steps. Step 1 is once per machine, step 2 is once per project.
+
+### 1. Create the directory on the host
 
 ```bash
 mkdir -p ~/.config/git
@@ -16,8 +16,38 @@ Git has two global config locations, and they are not additive. **If `~/.gitconf
 mkdir -p ~/.config/git && mv ~/.gitconfig ~/.config/git/config
 ```
 
-Do not create an empty `~/.gitconfig` to satisfy a mount. On an XDG setup that empty file turns off
-the whole configuration. This is measured, not assumed.
+Do not create an empty `~/.gitconfig` to satisfy the mount. On an XDG setup that empty file turns
+off the whole configuration. This is measured, not assumed.
+
+### 2. Add the mount to your own config
+
+This feature reads `/mnt/git-config` and does not mount anything there. You declare the mount, and
+the form depends on how the container is built. [The mount is yours](#the-mount-is-yours) says why.
+
+A single-container devcontainer, in `.devcontainer/devcontainer.json`:
+
+```jsonc
+"mounts": [
+  "type=bind,src=${localEnv:HOME}/.config/git,dst=/mnt/git-config,readonly"
+]
+```
+
+A compose project, in the service in your `docker-compose.yml`:
+
+```yaml
+services:
+  app:
+    volumes:
+      - ${HOME}/.config/git:/mnt/git-config:ro
+```
+
+**Put it in the compose file there, not in `devcontainer.json`.** The CLI renders a
+`devcontainer.json` mount into its compose override file as `<source>:<target>`, which has no place
+for `readonly`, so that mount comes up read-write.
+
+**A bind mount whose source does not exist stops the container from starting.** Docker does not
+create it, so do step 1 before step 2. With no mount at all the container starts as usual, and the
+feature says on `postCreate` that it copied nothing, and names both forms above.
 
 ## Notes
 
@@ -28,18 +58,35 @@ This feature has no options. On container create it copies these files, as the r
 | `~/.config/git/config` | `~/.config/git/config` |
 | `~/.config/git/ignore` | `~/.config/git/ignore` |
 
-One mount, `~/.config/git` maps to `/mnt/git-config`. So a global ignore file needs no
-`core.excludesfile` at all: `~/.config/git/ignore` is where git looks by default. The feature copies
-rather than links, so the container adjusts its own config and never writes back to the host.
+One path: your `~/.config/git` reaches the container at `/mnt/git-config`. So a global ignore file
+needs no `core.excludesfile` at all: `~/.config/git/ignore` is where git looks by default. The
+feature copies rather than links, so the container adjusts its own config and never writes back to
+the host.
 
-That mount is read-only. The metadata has no field for it: a feature's `mounts` are objects with
-`source`, `target` and `type` only, `type` takes `bind` or `volume`, and the schema does not accept
-the string form that carries `readonly`. The CLI renders a mount as
-`--mount type=<type>,src=<source>,dst=<target>`, so the flag rides on the end of the target —
-`"target": "/mnt/git-config,readonly"` — and docker reads it as an option of its own. Discipline
-backs the trick up, because it depends on how the CLI builds that argument. The feature only reads
-`/mnt/git-config`. The container's own git writes to `$HOME/.config/git`. The tests assert both that
-the mount is read-only and that it stays byte-identical after a run.
+### The mount is yours
+
+**This feature declares no mount of its own, and version 1 did.** A feature's mount metadata is an
+object with `source`, `target` and `type`, and that object has no field for the read-only flag.
+Every way around it depends on how the container is built.
+
+The `docker run` path renders a mount as `--mount type=<type>,src=<source>,dst=<target>`, so an
+option on the end of a mount string reaches docker and `readonly` holds. A compose project does not:
+the CLI writes an override file and renders each mount with the short volume syntax,
+`<source>:<target>`, which has no place for an option. No single mount value is read-only in both
+modes.
+
+So a feature-declared mount promises a read-only mount of your git directory and hands half its
+users a writable one. Version 1 did worse than that. It carried the flag on the end of the target,
+`"target": "/mnt/git-config,readonly"`, which docker reads as an option under `docker run` only:
+under compose it mounted the host directory at a path literally named `git-config,readonly`,
+read-write, and the feature then found nothing to copy.
+
+The mount belongs to whoever knows which mode the container is in, and that is you. The feature
+warns when it is not there and names both forms.
+
+The feature only reads `/mnt/git-config`. The container's own git writes to `$HOME/.config/git`. The
+`mounted` test scenario declares the mount the way you do, and asserts both that it is read-only and
+that it stays byte-identical after a run.
 
 The files go in **whole**, every section, filters included, with one exception below. The feature
 leaves a filter driver whose command is not installed to fail, because with `required = true` that

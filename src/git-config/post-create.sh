@@ -4,16 +4,20 @@
 # links: the container gets a normal writable file it can adjust without writing back to the host.
 #
 # Git has two global config locations and they are not additive: if ~/.gitconfig exists, the XDG
-# directory at ~/.config/git is ignored outright. So this feature mounts that directory and never
-# ~/.gitconfig — requiring an empty ~/.gitconfig to exist on the host, the way a bind mount would,
-# silently switches off the entire git configuration of an XDG setup.
+# directory at ~/.config/git is ignored outright. So this feature asks for a mount of that directory
+# and never of ~/.gitconfig — requiring an empty ~/.gitconfig to exist on the host, the way a bind
+# mount would, silently switches off the entire git configuration of an XDG setup.
 #
-# The mount is read-only, which a feature's mount metadata cannot say on its own: its schema takes
-# source, target and type only, and type is limited to "bind" or "volume". The CLI renders a mount
-# as `--mount type=<type>,src=<source>,dst=<target>`, so the flag rides along on the end of the
-# target ("/mnt/git-config,readonly") and docker parses it as its own option. Nothing below writes
-# to $SRC anyway, and nothing below should ever start to — the source is the host's own git
-# directory, and a stray write there would land on the host.
+# The mount is yours to declare, and this feature does not declare it. A feature's own mounts go
+# into the metadata as an object with source, target and type only, and that object has no field
+# for the read-only flag. Every workaround is mode-dependent: the `docker run` path takes an option
+# on the end of the mount string, and a compose project renders each mount as "<source>:<target>"
+# and drops it. A feature-declared mount would therefore promise read-only and hand half its users
+# a writable mount of their own git directory. So the feature asks for the mount and warns when it
+# is not there.
+#
+# Nothing below writes to $SRC, and nothing below should ever start to — the source is the host's
+# own git directory, and a stray write there would land on the host.
 #
 # The files are copied whole, sections and all. A filter driver whose command is missing here is
 # worth the hard failure it causes, because that failure is the thing that tells you to install the
@@ -25,6 +29,25 @@ set -euo pipefail
 # source directory instead of the host's real one.
 SRC="${GIT_CONFIG_SOURCE_DIR:-/mnt/git-config}"
 MARKER="# Written by the git-config devcontainer feature. Edits here are overwritten on rebuild."
+
+# The mount is the one thing this feature cannot install for itself. Say so where the person who
+# has to fix it will read it, and name both forms, because the right one depends on how the
+# container is built. Exit 0: a postCreateCommand that fails stops the whole container, and a
+# missing git config is not worth that.
+#
+# SC2016: the single quotes are the point. ${localEnv:HOME} is devcontainer.json syntax and ${HOME}
+# is compose syntax, and both are meant to reach the reader unexpanded, exactly as they type them.
+# shellcheck disable=SC2016
+if [ ! -d "$SRC" ]; then
+    echo "!!! git-config: $SRC is not there, so nothing was copied." >&2
+    echo "!!! git-config: this feature does not declare the mount. Add it to your own config." >&2
+    echo "!!!   devcontainer.json, for a single container:" >&2
+    echo '!!!     "mounts": ["type=bind,src=${localEnv:HOME}/.config/git,dst=/mnt/git-config,readonly"]' >&2
+    echo "!!!   docker-compose.yml, for a compose project (readonly is dropped in devcontainer.json there):" >&2
+    echo '!!!     volumes: ["${HOME}/.config/git:/mnt/git-config:ro"]' >&2
+    echo "!!! git-config: https://github.com/nshafer/devcontainer-features/tree/main/src/git-config" >&2
+    exit 0
+fi
 
 write_file() {
     local src="$1" dst="$2"

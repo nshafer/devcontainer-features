@@ -32,7 +32,8 @@ check "the baseline is merged, so VS Code can still reach the marketplace" bash 
     egress-status | grep -q "baseline:"
     grep -q "visualstudio" /etc/devcontainer/egress-filter/allow.regex'
 
-# The global list is a file on the host, mounted read-only.
+# The global list is a file on the host, on a mount the user declares. This suite declares none, so
+# the check below is what a container without that mount reports.
 # allow.regex is what the proxy reads and is unreadable at a glance: anchored, escaped, sorted, with
 # no trace of where any line came from. The concatenated file answers "why is this host allowed" and
 # "did my edit land", which is the question anyone actually has.
@@ -40,9 +41,9 @@ check "the concatenated allowlist is written, with a header per source" bash -c 
     f=/etc/devcontainer/egress-filter/allowlist.txt
     test -r "$f" || { echo "not written"; exit 1; }
     grep -q "^# baseline: " "$f" || { echo "no baseline header"; sed -n 1,20p "$f"; exit 1; }
-    grep -q "^# global: "   "$f" || { echo "no global header"; exit 1; }
-    # The header names the host-side path, not the mount, for the same reason the status does.
-    grep -q "^# global: ~/.config/egress-filter/allowlist.txt" "$f"         || { echo "global header does not name the host path"; grep "^# global" "$f"; exit 1; }
+    # No global header here: this suite declares no mount, so the global list is not a source. The
+    # mounted-global scenario checks that header.
+    ! grep -q "^# global: " "$f" || { echo "a global header with no mount"; exit 1; }
     grep -q "rewritten on every reload" "$f" || { echo "no do-not-edit warning"; exit 1; }'
 
 check "it carries the source comments through, not just the hosts" bash -c '
@@ -57,9 +58,8 @@ check "status points at it, so it can be found" bash -c '
 check "it is readable without root" bash -c '
     head -1 /etc/devcontainer/egress-filter/allowlist.txt >/dev/null || { echo "cannot read as $(whoami)"; exit 1; }'
 
-check "the global list on the host is merged" bash -c '
-    test -r /mnt/egress-filter/allowlist.txt || { echo "global list not mounted"; exit 1; }
-    egress-status | grep -q "global:"'
+check "a missing global mount is named, not silently skipped" bash -c '
+    egress-status | tee /dev/stderr | grep -q "global:   NOT MOUNTED"'
 
 # Deliberately not asserting anything about which hosts the *global* list happens to contain --
 # that file belongs to whoever is running the tests. Everything below is self-contained: prove the
@@ -81,11 +81,8 @@ check "editing the project list does NOT take effect while running" bash -c '
     code=$(fetch example.com); echo "  example.com=$code"
     [ "$code" != 200 ] || { echo "the agent widened its own allowlist -- this is the hole"; exit 1; }'
 
-check "the global list is read-only from inside, which is why it can be watched" bash -c '
-    echo evil.example.net >> /mnt/egress-filter/allowlist.txt 2>&1 | sed "s/^/  /"
-    ! grep -q evil /mnt/egress-filter/allowlist.txt 2>/dev/null \
-        || { echo "the container could write the global list"; exit 1; }
-    echo "  refused, as it must be"'
+# The global list, and the read-only mount that makes watching it safe, live in the `mounted-global`
+# scenario -- see mounted-global.sh, which declares the mount the way a user does.
 
 # ...and it IS honoured on the next start. That half needs root to rebuild, so it lives in the
 # privileged scenario, together with everything that depends on the host being allowed afterwards.

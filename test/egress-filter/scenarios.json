@@ -49,5 +49,15 @@
     "features": {
       "egress-filter": {}
     }
+  },
+  "mounted-global": {
+    "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+    "remoteUser": "root",
+    "mounts": [
+      "type=bind,src=${localEnv:HOME}/.config/egress-filter,dst=/mnt/egress-filter,readonly"
+    ],
+    "features": {
+      "egress-filter": {}
+    }
   }
 }
