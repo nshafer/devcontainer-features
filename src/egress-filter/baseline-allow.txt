@@ -12,3 +12,5 @@ update.code.visualstudio.com
 vscode.download.prss.microsoft.com
 .vo.msecnd.net
 marketplace.visualstudio.com
+mcr.microsoft.com
+.data.mcr.microsoft.com
