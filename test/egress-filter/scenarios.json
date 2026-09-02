@@ -50,6 +50,19 @@
       "egress-filter": {}
     }
   },
+  "docker-in-docker": {
+    "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+    "remoteUser": "root",
+    "features": {
+      "egress-filter": {
+        "presets": "docker",
+        "allow": "example.com"
+      },
+      "ghcr.io/devcontainers/features/docker-in-docker:4": {
+        "moby": false
+      }
+    }
+  },
   "mounted-global": {
     "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
     "remoteUser": "root",

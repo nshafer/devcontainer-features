@@ -227,6 +227,66 @@ does not survive either: compose merges volumes by target path and the override 
 the override wins. The compose file is the one place where `:ro` holds. See
 [The mount is yours](#the-mount-is-yours) and [Host setup](#host-setup).
 
+### Docker inside the container
+
+**An inner Docker daemon walks around the `OUTPUT` chain twice.** Add
+`ghcr.io/devcontainers/features/docker-in-docker` and two holes open at once:
+
+| what | why the chain misses it |
+| --- | --- |
+| `dockerd`'s own image pulls | It runs as root, so it lands on the `REJECT`. The failure reads as a registry timeout, which sends you to the registry rather than to the filter. |
+| Containers that `dockerd` starts | Each one has its own network namespace. Its packets are `FORWARD`ed, never `OUTPUT`, so `-m owner` never sees them. |
+
+The second one was a complete bypass. `docker run alpine wget https://anywhere` returned the page.
+
+**The feature closes both, and does it only when `dockerd` is installed.** There is no option to
+set. A container without an inner daemon sees no change at all.
+
+| piece | what it does |
+| --- | --- |
+| `/etc/docker/daemon.json` | A `proxies` block pointing at `127.0.0.1:3128`. `dockerd` shares this container's network namespace, so its loopback is ours and the `-o lo` rule lets it through. |
+| A second `Listen` on the proxy | The container's own address, because `127.0.0.1` inside a container is that container's loopback and not ours. |
+| `~/.docker/config.json` | A `proxies.default` block naming that address. `docker run` and `docker build` copy it into every container they start. |
+| `DOCKER-USER` | The same default deny as the `OUTPUT` chain, applied to the `FORWARD` path: DNS goes to the pinned resolvers, and the chain rejects everything else bound for the outside world. |
+| An `INPUT` rule | Drops the proxy port on the way in from the network this container arrived on, so listening on the container address does not offer the proxy to every sibling. |
+
+The feature **merges both JSON files and overwrites neither**. Registry credentials in `config.json` and a
+`log-driver` in `daemon.json` survive. The merge uses `python3`. Where there is no `python3` and the
+file already exists, the feature prints the block to add and does not touch the file.
+
+```
+$ egress-status
+egress-filter:
+  proxy          listening on 127.0.0.1:3128 as egressfilter
+  firewall       default deny, dns=true
+  dns            port 53 to 1.1.1.1 only
+  local          172.17.0.0/16 172.18.0.0/16 (direct, no proxy)
+  docker         filtered via http://172.17.0.2:3128, deny out eth0
+```
+
+**`DOCKER-USER` is the chain to use, and the daemon has to be running for it to matter.** Docker
+promises never to rewrite that chain, and it consults it before every rule it owns. This feature's
+entrypoint runs *before* `docker-init.sh`, so at that moment there is no daemon, no `docker0`, and —
+because `docker-init.sh` may switch the `iptables` backend between `legacy` and `nft` — possibly not
+even the right table. So the watcher already running for the global list also watches the interface
+set and the resolved `iptables` binary, and re-applies the firewall when either moves. Re-applying
+is safe: it empties each chain before it fills it, so this converges instead of stacking.
+
+That same pass is what puts the inner bridge into `localNetworks`. `auto` cannot see `172.18.0.0/16`
+at container start, because `dockerd` has not created it yet.
+
+**Re-applying flushes each chain before it fills it**, so there is a window of about a millisecond
+where the `OUTPUT` chain is empty and its policy is `ACCEPT`. That is how `apply_firewall` has always
+worked — the `firewall` subcommand does the same thing — but with an inner daemon it now happens
+again on each `docker network create` or `docker compose up` rather than once at container start. It
+takes a process already running and already racing to use one.
+
+**Two things follow from this that are worth expecting.** A container you start is filtered by
+hostname exactly like this one, so an image that pulls from a host you have not allowed fails the
+same way — read `egress-denied`. And the proxy variables that reach a container are the ones in
+`config.json`, so `docker run -e HTTP_PROXY=` clears them; the `DOCKER-USER` deny is what still
+holds after that.
+
 ### Building a list from evidence
 
 **`egress-denied` is how you build a list from evidence.** It prints every host the container asked

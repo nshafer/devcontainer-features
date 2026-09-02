@@ -36,6 +36,25 @@ One exception, for HTTP to such a service: a client that reads `HTTP_PROXY` send
 proxy, which denies it. The fix belongs in the feature's `noProxy` option and needs a restart, so
 report it the same way as a blocked host.
 
+## Containers you start yourself
+
+If this container runs a Docker daemon, the same allowlist covers every container you start with it,
+and the daemon's own image pulls. A build that fetches an unlisted host fails inside the container.
+The error there mentions no proxy at all:
+
+| what you run | what you see |
+| --- | --- |
+| `docker pull` | a registry timeout, or `failed to resolve reference` |
+| `RUN apt-get update` in a build | `Could not connect` on every mirror |
+| `docker run ... curl https://...` | `Connection refused`, or a 403 from the proxy |
+
+`egress-status` prints a `docker` line when this applies. Treat it exactly like any other block:
+`egress-denied` still lists every refusal, and a person still has to allow the host.
+
+Two moves look like fixes and are not. `--network host` puts the container in this container's own
+namespace, where the same firewall rejects it. `docker run -e HTTP_PROXY=` drops the polite route
+out, and the firewall then refuses the direct one.
+
 ## What will not work
 
 There is deliberately no command in this container that adds a host to the allowlist. If there

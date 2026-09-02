@@ -1,8 +1,8 @@
 {
   "id": "egress-filter",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "name": "Egress filter (nshafer)",
-  "description": "Default-deny outbound networking, with a hostname allowlist merged from a global list on the host, a per-project list in the repo, and a baseline that keeps VS Code working. Enforced by an in-container firewall, so an agent that ignores HTTP_PROXY simply cannot connect.",
+  "description": "Default-deny outbound networking, with a hostname allowlist merged from a global list on the host, a per-project list in the repo, and a baseline that keeps VS Code working. Enforced by an in-container firewall, so an agent that ignores HTTP_PROXY simply cannot connect. Containers started by an inner Docker daemon are filtered too.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/egress-filter",
   "options": {
     "presets": {
@@ -63,7 +63,7 @@
     "proxyPort": {
       "type": "string",
       "default": "3128",
-      "description": "Loopback port the filtering proxy listens on."
+      "description": "Port the filtering proxy listens on. Loopback only, unless an inner Docker daemon is installed - then it also answers on the container's own address, which is the only one a container it starts can reach."
     }
   },
   "capAdd": [
