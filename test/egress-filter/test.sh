@@ -82,10 +82,35 @@ check "status reports whether the container environment carries the proxy" bash 
         { echo "no warning, and no proxy in the environment either"; exit 1; }
     echo "$out" | grep -q "\"HTTP_PROXY\": \"http://127.0.0.1:3128\"" ||
         { echo "the block does not name this proxy"; exit 1; }
-    for net in $(ip -4 route show scope link | awk "\$1 ~ /\\// { print \$1 }"); do
-        echo "$out" | grep -q "\"NO_PROXY\": .*$net" ||
-            { echo "$net is open but missing from the suggested NO_PROXY"; exit 1; }
-        echo "  $net is in the suggested NO_PROXY"
+    # No subnet in it. The block has to be the same on every machine, and it is the proxy that
+    # reaches the local subnets by address -- see the next check.
+    echo "$out" | grep -q "\"NO_PROXY\": \"localhost,127.0.0.1,::1\"" ||
+        { echo "the suggested NO_PROXY is not the static list"; exit 1; }
+    echo "  the block to paste carries the static NO_PROXY"'
+
+# A client that reads HTTP_PROXY sends a request for a peer to the proxy. The firewall lets the peer
+# through directly, and that used to be the only route: the proxy denied the address for not being
+# a hostname on the list, which is what NO_PROXY had to name every subnet for. Now the proxy holds a
+# pattern for every local subnet, so the request reaches the peer either way. Proven against this
+# container's own address, which is on the subnet, with a server that answers on it.
+check "the proxy forwards to a peer on the local subnet by address" bash -c '
+    me=$(ip -4 -o addr show scope global | awk "{ print \$4 }" | cut -d/ -f1 | head -1)
+    [ -n "$me" ] || { echo "no address on a global-scope interface"; exit 1; }
+    node -e "require(\"http\").createServer((q,r)=>r.end(\"peer\")).listen(18080,\"$me\")" &
+    pid=$!
+    sleep 1
+    code=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" -x http://127.0.0.1:3128 "http://$me:18080/" || echo 000)
+    kill $pid 2>/dev/null
+    echo "  $me:18080 via the proxy -> $code"
+    [ "$code" = 200 ] || { grep -n "^\^[0-9]" /etc/devcontainer/egress-filter/allow.regex; exit 1; }'
+
+# The pattern is the subnet and nothing wider: a public address literal is still refused, and so is
+# a private one on a subnet this container is not attached to.
+check "the address patterns do not reach past the local subnet" bash -c '
+    for ip in 1.1.1.1 192.0.2.7 10.99.99.99; do
+        code=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" -x http://127.0.0.1:3128 "http://$ip/" || echo 000)
+        echo "  $ip via the proxy -> $code"
+        [ "$code" = 403 ] || { echo "$ip was not refused"; exit 1; }
     done'
 
 check "a missing global mount is named, not silently skipped" bash -c '

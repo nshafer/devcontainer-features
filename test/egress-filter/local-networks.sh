@@ -37,11 +37,14 @@ check "egress-status names the local subnet" bash -c '
 
 # The CIDR and the service names both land in the environment, because the firewall allowing a peer
 # is only half of it -- a client that reads HTTP_PROXY would still send the request to the proxy.
-check "NO_PROXY carries the subnet and the named services" bash -c '
+check "NO_PROXY carries the named services, and the proxy carries the subnet" bash -c '
     grep "^NO_PROXY=" /etc/environment | tee /dev/stderr | grep -q "192.168.222.0/24" \
-        || { echo "the subnet is not in NO_PROXY"; exit 1; }
+        && { echo "the subnet is in NO_PROXY, which ties the block to this machine"; exit 1; }
     grep -q "^NO_PROXY=.*\bdb\b.*\bredis\b" /etc/environment \
         || { echo "the noProxy services are not in NO_PROXY"; exit 1; }
+    grep -q "^\^192\\\\.168\\\\.222\\\\.\[0-9\]{1,3}\$$" /etc/devcontainer/egress-filter/allow.regex \
+        || { grep "^\^[0-9]" /etc/devcontainer/egress-filter/allow.regex; echo "no address pattern for the subnet"; exit 1; }
+    echo "  the subnet is an address pattern in the proxy: $(grep "^\^192" /etc/devcontainer/egress-filter/allow.regex)"
     . /etc/profile.d/00-devcontainer-egress-filter.sh
     case "$NO_PROXY" in *db,redis*) echo "  profile.d agrees: $NO_PROXY" ;;
         *) echo "profile.d disagrees: $NO_PROXY"; exit 1 ;; esac'

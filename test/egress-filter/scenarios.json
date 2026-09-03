@@ -86,8 +86,7 @@
     },
     "features": {
       "egress-filter": {
-        "allow": "example.com",
-        "localNetworks": "off"
+        "allow": "example.com"
       }
     }
   },
@@ -105,7 +104,7 @@
     "features": {
       "egress-filter": {
         "allow": "example.com",
-        "localNetworks": "auto"
+        "noProxy": "db,redis"
       }
     }
   }

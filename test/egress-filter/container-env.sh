@@ -48,8 +48,8 @@ check "status says a plain docker exec inherits it, and prints no warning" bash 
 # status reads it from there.
 # The CLI appends the container environment to /etc/environment after the entrypoint has run. When
 # that block already says what this feature would say, writing a second copy explains nothing to
-# whoever reads the file next, so the feature writes none. localNetworks is off in this scenario,
-# which is what makes the two identical.
+# whoever reads the file next, so the feature writes none. The two are identical because NO_PROXY
+# carries no subnet: the proxy forwards to the local subnets by address instead.
 check "there is one definition of the proxy in /etc/environment, not two" bash -c '
     grep -n "PROXY" /etc/environment | sed "s/^/  /"
     n=$(grep -c "^HTTP_PROXY=" /etc/environment)

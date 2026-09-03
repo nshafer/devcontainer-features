@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# The same containerEnv block, and a NO_PROXY that has fallen behind.
+# The same containerEnv block, and a NO_PROXY that does not repeat the noProxy option.
 #
-# The block is a fixed string in a config file. It cannot read the routing table, so the subnets in
-# it are the ones somebody copied on the day they wrote it. This scenario names none of them, while
-# localNetworks is auto and the firewall opens whatever docker attached. A process that reads the
-# block then sends a request for a peer on one of those subnets to the proxy, which denies it.
+# The block is a fixed string in a config file. Subnets are not in it, because the proxy forwards to
+# the local subnets by address, so the block is the same on every machine. Names are the one thing
+# it has to carry: a client that reads the block sends `http://db:8080` to the proxy, which has no
+# address pattern for a name and denies it. This scenario names db and redis in the option and not
+# in the block.
 #
 # Two things have to happen. status has to say so and print the block to paste, and /etc/environment
 # has to end up with the complete list, because the CLI appends the container environment to that
@@ -12,41 +13,34 @@
 set -e
 source dev-container-features-test-lib
 
-check "the firewall opened a subnet the block does not name" bash -c '
-    nets=$(ip -4 route show scope link | awk "\$1 ~ /\\// { print \$1 }")
-    [ -n "$nets" ] || { echo "no on-link subnets, so there is nothing to fall behind"; exit 1; }
-    echo "  open: $nets"
+check "the block does not repeat the noProxy names" bash -c '
     np=$(tr "\0" "\n" < /proc/1/environ | sed -n "s/^NO_PROXY=//p" | head -1)
     echo "  block says: $np"
-    for net in $nets; do
-        case ",$np," in *",$net,"*) echo "$net is in the block after all"; exit 1 ;; esac
-    done'
+    case ",$np," in *,db,*|*,redis,*) echo "the block carries the names after all"; exit 1 ;; esac'
 
-check "status reports the block as out of date" bash -c '
+check "status reports the block as incomplete" bash -c '
     out=$(egress-status | tee /dev/stderr)
-    echo "$out" | grep -qE "container env +set, but NO_PROXY is out of date" ||
+    echo "$out" | grep -qE "container env +set, but NO_PROXY is incomplete" ||
         { echo "status calls it fine"; exit 1; }
     echo "$out" | grep -q "update containerEnv in .devcontainer/devcontainer.json" ||
         { echo "no warning"; exit 1; }
-    for net in $(ip -4 route show scope link | awk "\$1 ~ /\\// { print \$1 }"); do
-        echo "$out" | grep -q "$net" || { echo "$net is not named in the warning"; exit 1; }
-    done
-    echo "  the warning names every open subnet"'
+    echo "$out" | grep -qE "missing these entries" || { echo "the warning does not say what is missing"; exit 1; }
+    echo "$out" | grep -A1 "missing these entries" | grep -q "db redis" ||
+        { echo "the warning does not name db and redis"; exit 1; }
+    echo "$out" | grep -q "\"NO_PROXY\": \"localhost,127.0.0.1,::1,db,redis\"" ||
+        { echo "the block to paste does not carry the names"; exit 1; }
+    echo "  the warning names db and redis, and the block to paste carries them"'
 
 # pam_env takes the last assignment in the file. The CLI appends the container environment after the
 # entrypoint has run, so the watcher is what puts the complete list back at the end.
 check "the last NO_PROXY in /etc/environment is the complete one" bash -c '
-    nets=$(ip -4 route show scope link | awk "\$1 ~ /\\// { print \$1 }")
     for _ in $(seq 1 15); do
         v=$(sed -n "s/^NO_PROXY=//p" /etc/environment | tail -1 | tr -d "\"")
-        ok=yes
-        for net in $nets; do
-            case ",$v," in *",$net,"*) ;; *) ok=no ;; esac
-        done
-        [ "$ok" = yes ] && break
+        [ "$v" = "localhost,127.0.0.1,::1,db,redis" ] && break
         sleep 1
     done
     echo "  effective NO_PROXY: $v"
-    [ "$ok" = yes ] || { grep -n PROXY /etc/environment; echo "the stale value still wins"; exit 1; }'
+    [ "$v" = "localhost,127.0.0.1,::1,db,redis" ] ||
+        { grep -n PROXY /etc/environment; echo "the incomplete value still wins"; exit 1; }'
 
 reportResults

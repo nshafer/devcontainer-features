@@ -57,8 +57,8 @@ project too: the CLI renders `containerEnv` into its override file as `environme
   "HTTPS_PROXY": "http://127.0.0.1:3128",
   "http_proxy": "http://127.0.0.1:3128",
   "https_proxy": "http://127.0.0.1:3128",
-  "NO_PROXY": "localhost,127.0.0.1,::1,172.17.0.0/16",
-  "no_proxy": "localhost,127.0.0.1,::1,172.17.0.0/16"
+  "NO_PROXY": "localhost,127.0.0.1,::1",
+  "no_proxy": "localhost,127.0.0.1,::1"
 }
 ```
 
@@ -67,13 +67,13 @@ and every connection it makes is refused. A terminal is not affected. See
 [Processes started by `docker exec`](#processes-started-by-docker-exec) for why the feature cannot
 add this for you.
 
-Two values in the block are yours to keep in step:
+The block is the same on every machine. No subnet is in `NO_PROXY`, because the proxy forwards to
+this container's local subnets by address itself. Two things in it follow an option, and only those:
 
-- **The port**, with the `proxyPort` option.
-- **`NO_PROXY`**, with the subnets the firewall opens. `172.17.0.0/16` above is the docker default
-  bridge, which is what a single-container devcontainer usually gets. A compose project or a named
-  network gets another one. `egress-status` names the missing subnets and prints the whole block
-  with the current values, so paste it from there whenever it says the block is out of date.
+- **The port** follows `proxyPort`.
+- **`NO_PROXY`** repeats the names from `noProxy`: `"localhost,127.0.0.1,::1,db,redis"` for
+  `"noProxy": "db,redis"`. `egress-status` prints the whole block with both filled in, so paste it
+  from there.
 
 This feature also needs `sandbox` and its sudo drop. A remote user with sudo runs `iptables -F` and
 the whole filter is gone. Use the two features together.
@@ -222,11 +222,19 @@ carries an address outside the subnet, even though it leaves through the same ga
 `169.254/16`. A public subnet on an interface means host networking or a `macvlan`, where "the local
 network" is the internet, and opening it would undo the filter. That case is a warning and a skip.
 
-**Name the services in `noProxy` if you talk HTTP to them.** The firewall allows the peer, but a
-client that reads `HTTP_PROXY` sends `http://db:8080` to the proxy, which denies it for not being on
-the allowlist. The CIDRs go into `NO_PROXY` automatically, and Go and docker honour them, but `curl`
-and Python match `NO_PROXY` by name only. The feature cannot know what compose called the service,
-so you say it:
+**The proxy reaches these subnets too, by address.** A client that reads `HTTP_PROXY` sends a
+request for `http://172.18.0.5:9000` to the proxy rather than straight to the peer. The allowlist is
+hostnames, so the proxy used to deny that, and `NO_PROXY` had to name every subnet to keep such a
+client off the proxy — a list that changed with every machine. Now `build_list` turns each subnet
+into an anchored address pattern, `^172\.18\.[0-9]{1,3}\.[0-9]{1,3}$`, and the request reaches the
+peer either way. Nothing is widened: every process here could already reach the peer directly. What
+it buys is a `NO_PROXY` with no subnet in it, which is what lets the `containerEnv` block in step 3
+be the same everywhere. `egress-status` lists the subnets under `local`, and the allowlist file
+shows the pattern each one became.
+
+**Name the services in `noProxy` if you talk HTTP to them.** A name is not an address, so no pattern
+covers `http://db:8080`, and the proxy denies it. The feature cannot know what compose called the
+service, so you say it, and the same names go into the `containerEnv` block:
 
 ```jsonc
 "ghcr.io/nshafer/devcontainer-features/egress-filter:2": {
@@ -289,7 +297,7 @@ egress-filter:
   proxy          listening on 127.0.0.1:3128 as egressfilter
   firewall       default deny, dns=true
   dns            port 53 to 1.1.1.1 only
-  local          172.17.0.0/16 172.18.0.0/16 (direct, no proxy)
+  local          172.17.0.0/16 172.18.0.0/16 (direct, and through the proxy by address)
   docker         filtered via http://172.17.0.2:3128, deny out eth0
 ```
 
@@ -351,6 +359,12 @@ egress-filter:
   proxy          listening on 127.0.0.1:3128 as egressfilter
   upstream       via 172.17.0.2:3128 -- both allowlists apply
 ```
+
+**Peers on the local subnets do not take the chain.** The generated config carries an
+`Upstream none "172.18.0.0/16"` line for each subnet `localNetworks` opened, so a request for a peer
+by address goes to the peer. Without that line it would go up the chain like everything else, and
+the outer proxy would refuse an address it has no pattern for, with a 403 that reads as the inner
+list's fault.
 
 **Nothing is widened by this.** A host has to be on *both* lists to be reached. The inner proxy
 refuses first on its own list, and the outer proxy refuses after on its own. Two containers deep is
@@ -443,7 +457,7 @@ exist yet.
 
 **The CLI writes to `/etc/environment` as well, and it writes last.** After the entrypoint runs, it
 appends the whole container environment to that file — `containerEnv` included. `pam_env` takes the
-last assignment, so a `containerEnv` with a stale `NO_PROXY` overrides the complete list this feature
+last assignment, so a `containerEnv` with an incomplete `NO_PROXY` overrides the list this feature
 wrote a second earlier. Two rules follow from that, and both are in `write_proxy_env`:
 
 - When the container environment already carries the right values, the feature writes no block at
@@ -500,10 +514,10 @@ container env  http://172.18.0.1:3128 -- another proxy, see the warning below
 ```
 
 A fourth state is the one that costs the most to find. The block names this proxy and its `NO_PROXY`
-has fallen behind the subnets the firewall opened:
+does not repeat a name from the `noProxy` option:
 
 ```
-container env  set, but NO_PROXY is out of date -- see the warning below
+container env  set, but NO_PROXY is incomplete -- see the warning below
 ```
 
 Every state except the first prints the whole block to paste, with this container's own port and
@@ -529,23 +543,23 @@ The proxy starts at container start, not during the build, so that address refus
 project `containerEnv` has none of that problem: the CLI passes it as `docker run -e`, and the build
 never sees it.
 
-**The block is static, and three things in it drift.** `containerEnv` is a fixed string in a config
-file. It cannot read an option and it cannot read the network, so nothing keeps it in step for you:
+**The block is static, and it is meant to be.** `containerEnv` is a fixed string in a config file.
+It cannot read the network, which is why no subnet is in it: the proxy forwards to the local subnets
+by address (see [Sibling containers](#sibling-containers-and-docker-compose)), so the list this
+feature writes is the same on every machine, and the block matches it. Three things still follow
+from an option, and only those:
 
-- **The port.** Change it with the `proxyPort` option, never on its own.
-- **`NO_PROXY`, against `localNetworks`.** `up` works out this container's own subnets at container
-  start and writes the full list to `/etc/environment`. The block cannot do that, so it carries the
-  subnets as they were when you copied it. Update it whenever `localNetworks` changes, whenever this
-  container joins another network, and whenever a compose service moves. A peer that is missing from
-  the list goes to the proxy, which denies it for not being on the allowlist. A service reached by
-  name — `db`, `redis` — belongs in the `noProxy` option and in this block, under both spellings.
+- **The port** follows `proxyPort`. Change both together.
+- **`NO_PROXY`** repeats the names from `noProxy`. A name is not an address, so no pattern covers
+  `http://db:8080`, and a client that reads the block sends it to the proxy, which denies it. The
+  names belong in the option and in the block, under both spellings.
 - **The upstream, in a nested dev container.** The outer proxy address reaches the inner container in
   `HTTP_PROXY`, which is the variable this block overwrites, so `upstreamProxy: auto` finds nothing
   to chain to. Set `upstreamProxy` to the outer address instead. See
   [A dev container inside a dev container](#a-dev-container-inside-a-dev-container).
 
-`status` prints the block with the current port and the current subnets filled in, which is why it
-is the copy worth taking.
+`status` prints the block with the port and the names filled in, which is why it is the copy worth
+taking.
 
 ### Building a list from evidence
 

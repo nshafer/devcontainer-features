@@ -49,8 +49,8 @@ Add to your `.devcontainer/devcontainer.json` (or `.devcontainer/devcontainer.lo
     "HTTPS_PROXY": "http://127.0.0.1:3128",
     "http_proxy": "http://127.0.0.1:3128",
     "https_proxy": "http://127.0.0.1:3128",
-    "NO_PROXY": "localhost,127.0.0.1,::1,172.17.0.0/16",
-    "no_proxy": "localhost,127.0.0.1,::1,172.17.0.0/16"
+    "NO_PROXY": "localhost,127.0.0.1,::1",
+    "no_proxy": "localhost,127.0.0.1,::1"
   }
 }
 ```
@@ -156,8 +156,8 @@ needed in a compose project as well, where the CLI renders it into its override 
   "HTTPS_PROXY": "http://127.0.0.1:3128",
   "http_proxy": "http://127.0.0.1:3128",
   "https_proxy": "http://127.0.0.1:3128",
-  "NO_PROXY": "localhost,127.0.0.1,::1,172.17.0.0/16",
-  "no_proxy": "localhost,127.0.0.1,::1,172.17.0.0/16"
+  "NO_PROXY": "localhost,127.0.0.1,::1",
+  "no_proxy": "localhost,127.0.0.1,::1"
 }
 ```
 
@@ -167,9 +167,11 @@ the files the feature writes. The feature cannot add the block itself — a feat
 becomes a Dockerfile `ENV` placed before its own install step, and the proxy does not exist during
 the build.
 
-`172.17.0.0/16` is the docker default bridge. A compose project or a named network gets another
-subnet, and `egress-status` then says the block is out of date and prints the current one to paste.
-See [Processes started by `docker exec`](src/egress-filter/README.md#processes-started-by-docker-exec).
+The block is the same on every machine. No subnet is in `NO_PROXY`: the proxy forwards to the
+container's local subnets by address itself. Only two things follow an option — the port follows
+`proxyPort`, and `NO_PROXY` repeats the names from `noProxy` — and `egress-status` prints the block
+with both filled in. See
+[Processes started by `docker exec`](src/egress-filter/README.md#processes-started-by-docker-exec).
 
 **In a compose project, put the mount in the compose file** Not in `devcontainer.json`. The CLI renders every
 `devcontainer.json` mount into its compose override file as `<source>:<target>`, the short volume syntax, which has no

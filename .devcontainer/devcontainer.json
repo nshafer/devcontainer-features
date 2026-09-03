@@ -64,19 +64,16 @@
   // apt-get in every feature after it would fail. See "Processes started by docker exec" in the
   // feature's README.
   //
-  // Keep the port equal to the feature's proxyPort option, and NO_PROXY equal to the subnets the
-  // firewall opens. The two subnets below are the outer bridge and the inner daemon's bridge, and
-  // they are what docker hands this project on a normal machine. They are not guaranteed: another
-  // machine, another compose project or another network gets different ones, and `egress-status`
-  // then says the block is out of date and prints the current one to paste. That warning is the
-  // whole mechanism -- read it rather than assuming these two values travel.
+  // The same block on every machine. No subnet is in NO_PROXY: the proxy forwards to this
+  // container's local subnets by address itself. Keep the port equal to the feature's proxyPort
+  // option, and repeat any noProxy names here -- this project has none.
   "containerEnv": {
     "HTTP_PROXY": "http://127.0.0.1:3128",
     "HTTPS_PROXY": "http://127.0.0.1:3128",
     "http_proxy": "http://127.0.0.1:3128",
     "https_proxy": "http://127.0.0.1:3128",
-    "NO_PROXY": "localhost,127.0.0.1,::1,172.17.0.0/16,172.18.0.0/16",
-    "no_proxy": "localhost,127.0.0.1,::1,172.17.0.0/16,172.18.0.0/16"
+    "NO_PROXY": "localhost,127.0.0.1,::1",
+    "no_proxy": "localhost,127.0.0.1,::1"
   },
 
   // git-config and egress-filter declare no mounts of their own -- a feature's mount metadata has
