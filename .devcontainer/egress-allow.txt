@@ -12,3 +12,16 @@
 # The CLI asks containers.dev for a control manifest before it resolves features. The run survives
 # the refusal, but every test starts with "Failed to fetch control manifest: HTTP 403: Filtered".
 containers.dev
+
+# The host four scenarios use as "a host that is allowed", fetched from inside the test container.
+#
+# It has to be on this list as well, and that is the nesting rule rather than an exception to it. A
+# test container is a container of this container, so its own proxy has no route out and chains to
+# this one -- see "A dev container inside a dev container" in the feature README. Both allowlists
+# then apply. Without this entry the scenario allows example.com, this container refuses it, and the
+# check reads "403 Filtered", which looks like the filter working when it is the harness that cannot
+# reach the host.
+#
+# Nothing else the suite fetches needs an entry. deb.debian.org and registry.npmjs.org come from the
+# presets, and every other host in the tests is one the tests expect to be refused.
+example.com

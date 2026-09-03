@@ -245,8 +245,8 @@ set. A container without an inner daemon sees no change at all.
 | piece | what it does |
 | --- | --- |
 | `/etc/docker/daemon.json` | A `proxies` block pointing at `127.0.0.1:3128`. `dockerd` shares this container's network namespace, so its loopback is ours and the `-o lo` rule lets it through. |
-| A second `Listen` on the proxy | The container's own address, because `127.0.0.1` inside a container is that container's loopback and not ours. |
-| `~/.docker/config.json` | A `proxies.default` block naming that address. `docker run` and `docker build` copy it into every container they start. |
+| The proxy listens on every address | `127.0.0.1` inside a container is that container's own loopback, not ours. Binding named addresses would need a proxy restart every time a `docker network create` added one. |
+| `~/.docker/config.json` | A `proxies.default` block naming the **bridge** address, not `eth0`. `docker run` and `docker build` copy it into every container they start. |
 | `DOCKER-USER` | The same default deny as the `OUTPUT` chain, applied to the `FORWARD` path: DNS goes to the pinned resolvers, and the chain rejects everything else bound for the outside world. |
 | An `INPUT` rule | Drops the proxy port on the way in from the network this container arrived on, so listening on the container address does not offer the proxy to every sibling. |
 
@@ -280,6 +280,74 @@ where the `OUTPUT` chain is empty and its policy is `ACCEPT`. That is how `apply
 worked — the `firewall` subcommand does the same thing — but with an inner daemon it now happens
 again on each `docker network create` or `docker compose up` rather than once at container start. It
 takes a process already running and already racing to use one.
+
+**`dockerd` reads `daemon.json` once, when it starts, so when the file is written decides whether it
+works.** Entrypoints run in install order. List `docker-in-docker` before `egress-filter` and its
+entrypoint runs first, `dockerd` comes up before `egress.sh` gets a turn, and the file arrives too
+late to be read. The daemon then pulls without the proxy for the life of the container, and the
+failure looks like a registry timeout.
+
+Three things close that:
+
+| when | what |
+| --- | --- |
+| build time | `install.sh` writes `daemon.json` into the image. In the bad ordering `dockerd` is already installed by then, so the file is on disk before any daemon can start. |
+| container start | `egress.sh` writes it again, with the real local subnets, which the build could not know. |
+| after the firewall | `egress.sh` asks the running daemon what proxy it has. If the answer is wrong it restarts the daemon — but only when no containers are running. |
+
+**The restart never takes a running container with it.** Where containers are running, `egress.sh`
+warns, changes nothing, and prints the command. That case needs a person:
+
+```
+pkill dockerd; pkill containerd; /usr/local/share/docker-init.sh
+```
+
+**Every report about the daemon asks the daemon, not the file.** `egress-status` runs
+`docker info` and prints a second `docker` line when the two disagree. A correct `daemon.json` and an
+unproxied daemon look identical from the file, and that pair used to report success — which sent
+people to read the allowlist when the daemon was the problem.
+
+### A dev container inside a dev container
+
+**The inner filter has no route out of its own.** The proxy it starts is a container of the *outer*
+daemon, so the outer `DOCKER-USER` chain rejects it exactly like any other container. Every request
+in the inner container then fails, and the inner allowlist is not the reason.
+
+**`upstreamProxy` gives it one, and `auto` is the default.** The proxy takes a tinyproxy `Upstream`
+line pointing at the outer proxy, so requests go inner proxy → outer proxy → the host:
+
+```
+$ egress-status
+egress-filter:
+  proxy          listening on 127.0.0.1:3128 as egressfilter
+  upstream       via 172.17.0.2:3128 -- both allowlists apply
+```
+
+**Nothing is widened by this.** A host has to be on *both* lists to be reached. The inner proxy
+refuses first on its own list, and the outer proxy refuses after on its own. Two containers deep is
+two allowlists, and the outer one always wins.
+
+`auto` reads `HTTP_PROXY` from the container's own PID 1 — the environment the runtime handed the
+container, which nothing inside it can rewrite. It is deliberately *not* this script's environment:
+`/etc/environment` names this proxy, so a second `egress.sh up` run from a shell would read its own
+address back and chain the proxy to itself. A self-chain is caught and dropped either way.
+
+| you want | set |
+| --- | --- |
+| chain to whatever the runtime gave this container | `"upstreamProxy": "auto"` (the default) |
+| never chain | `"upstreamProxy": "off"` |
+| a corporate proxy the environment does not name | `"upstreamProxy": "proxy.corp:8080"` |
+
+The address the outer container hands down is its own, and `docker run` copies it in — see
+`config.json` above. So a nested container needs no configuration for this to work.
+
+**One client shape does not survive the extra hop, and busybox is the one that sends it.** Alpine's
+`wget` cannot do TLS through a proxy, so for an `https://` URL it sends `GET https://host/...`
+instead of a `CONNECT`. A single proxy answers that on its own. Forwarding it upstream turns the
+host into `host:80https`, which matches no allowlist, and the outer proxy returns `403 Filtered` for
+a host that is on both lists. Measured on the chain: plain `http`, and any real `CONNECT`, both
+return 200. `curl`, `git`, `apt`, `npm` and the language toolchains all send `CONNECT`. Only reach
+for `apk add curl` when a busybox container has to fetch `https` from two containers deep.
 
 **Two things follow from this that are worth expecting.** A container you start is filtered by
 hostname exactly like this one, so an image that pulls from a host you have not allowed fails the

@@ -55,7 +55,7 @@
     "remoteUser": "root",
     "features": {
       "egress-filter": {
-        "presets": "docker",
+        "presets": "docker,debian",
         "allow": "example.com"
       },
       "ghcr.io/devcontainers/features/docker-in-docker:4": {

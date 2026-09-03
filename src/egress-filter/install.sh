@@ -16,6 +16,7 @@ ALLOW_DNS="${ALLOWDNS:-true}"
 DNS_SERVERS="${DNSSERVERS:-}"
 LOCAL_NETWORKS="${LOCALNETWORKS:-auto}"
 NO_PROXY_EXTRA="${NOPROXY:-}"
+UPSTREAM_PROXY="${UPSTREAMPROXY:-auto}"
 PROXY_PORT="${PROXYPORT:-3128}"
 
 SHARE_DIR=/usr/local/share/devcontainer/egress-filter
@@ -121,6 +122,7 @@ ALLOW_DNS=$ALLOW_DNS
 DNS_SERVERS="$DNS_SERVERS"
 LOCAL_NETWORKS="$LOCAL_NETWORKS"
 NO_PROXY_EXTRA="$NO_PROXY_EXTRA"
+UPSTREAM_PROXY="$UPSTREAM_PROXY"
 PROXY_PORT=$PROXY_PORT
 PROXY_USER=$PROXY_USER
 USERNAME=$USERNAME
@@ -137,5 +139,27 @@ exec $SHARE_DIR/egress.sh status
 EOF
 install -m 0755 egress-denied.sh /usr/local/bin/egress-denied
 chmod 0755 /usr/local/bin/egress-status
+
+# The one thing that has to happen at build time rather than at container start.
+#
+# dockerd reads /etc/docker/daemon.json once, when it starts, and entrypoints run in install order.
+# So when the docker-in-docker feature installs *before* this one, its entrypoint runs first, dockerd
+# is already up by the time egress.sh gets a turn, and the daemon.json egress.sh writes is too late
+# to be read. The daemon then pulls without the proxy and fails with registry timeouts.
+#
+# In exactly that ordering, dockerd is installed by the time this script runs. So the file goes into
+# the image here, before any daemon can start, and the ordering stops mattering. egress.sh rewrites
+# it at container start with the real local subnets, which is what a daemon starting later reads.
+#
+# localNetworks is forced off for this call: local_networks would otherwise read the *build*
+# container's routing table, and those subnets are not the ones the container will run on.
+if command -v dockerd >/dev/null 2>&1 || command -v docker >/dev/null 2>&1; then
+    if EGRESS_LOCAL_NETWORKS=off "$SHARE_DIR/egress.sh" docker-conf; then
+        echo "==> egress-filter: wrote /etc/docker/daemon.json for the inner daemon"
+    else
+        echo "!!! egress-filter: could not write /etc/docker/daemon.json. If dockerd starts before" >&2
+        echo "!!!   this feature's entrypoint, its pulls will fail as registry timeouts." >&2
+    fi
+fi
 
 echo "==> egress-filter: build stage done"

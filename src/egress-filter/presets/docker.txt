@@ -7,3 +7,7 @@ production.cloudfront.docker.com
 # GitHub Container Registry.
 ghcr.io
 pkg-containers.githubusercontent.com
+# Installing Docker, which is a different host from pulling with it. The docker-in-docker feature
+# fetches the signing key and the packages from here at build time, and a block shows up as
+# `curl: (22) ... error: 403` followed by `gpg: no valid OpenPGP data found`.
+download.docker.com

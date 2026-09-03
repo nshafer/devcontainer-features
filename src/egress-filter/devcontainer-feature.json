@@ -1,6 +1,6 @@
 {
   "id": "egress-filter",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "name": "Egress filter (nshafer)",
   "description": "Default-deny outbound networking, with a hostname allowlist merged from a global list on the host, a per-project list in the repo, and a baseline that keeps VS Code working. Enforced by an in-container firewall, so an agent that ignores HTTP_PROXY simply cannot connect. Containers started by an inner Docker daemon are filtered too.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/egress-filter",
@@ -59,6 +59,15 @@
       "type": "string",
       "default": "",
       "description": "Extra entries for NO_PROXY, comma separated. The firewall already allows localNetworks, but a client that reads HTTP_PROXY sends 'http://db:8080' to the proxy, which denies it. Name such services here: 'db,redis,minio'."
+    },
+    "upstreamProxy": {
+      "type": "string",
+      "default": "auto",
+      "proposals": [
+        "auto",
+        "off"
+      ],
+      "description": "Where this container's proxy sends what it cannot reach itself. A dev container inside a dev container needs this: the inner proxy is a container of the outer daemon, so the outer firewall rejects it like any other. 'auto' uses the HTTP_PROXY the runtime gave this container, and is a no-op when there is none. 'off' never chains. Anything else is a host:port. Both allowlists apply, the inner one first."
     },
     "proxyPort": {
       "type": "string",
