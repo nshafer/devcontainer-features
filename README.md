@@ -42,8 +42,8 @@ Add to your `.devcontainer/devcontainer.json` (or `.devcontainer/devcontainer.lo
     "type=bind,src=${localEnv:HOME}/.config/egress-filter,dst=/mnt/egress-filter,readonly"
   ],
 
-  // Global container environment for accurate usage of the egress proxy by all processes,
-  // including those started by `docker exec` and VS Code extensions
+  // Optional. VS Code gets the proxy from the environment probe without this. It is here for
+  // processes started with a bare `docker exec` from outside VS Code, such as `devc exec sh`.
   "containerEnv": {
     "HTTP_PROXY": "http://127.0.0.1:3128",
     "HTTPS_PROXY": "http://127.0.0.1:3128",
@@ -146,9 +146,12 @@ services:
 only because nothing inside the container can write it. `egress-filter` warns when the mount is
 read-write, and `egress-status` says `global: NOT MOUNTED` when it is missing.
 
-Then add the proxy to the container environment, in the same `devcontainer.json`. This one is
-needed in a compose project as well, where the CLI renders it into its override file as
-`environment`:
+One optional block remains, and VS Code does not need it: the feature writes the proxy variables
+to `/etc/profile.d`, the VS Code environment probe reads them, and VS Code applies the probe to the
+extension host. Add the block when something starts a process with a bare `docker exec` from
+outside VS Code — a CI step, a script, `devc exec sh` — because such a process inherits the container
+environment and nothing else. It works in a compose project as well, where the CLI renders it into
+its override file as `environment`:
 
 ```jsonc
 "containerEnv": {
@@ -161,11 +164,8 @@ needed in a compose project as well, where the CLI renders it into its override 
 }
 ```
 
-Without it, a process that VS Code starts, and any process started with `docker exec`, gets no proxy
-and every connection it makes is refused. A terminal is not affected, because a login shell reads
-the files the feature writes. The feature cannot add the block itself — a feature's `containerEnv`
-becomes a Dockerfile `ENV` placed before its own install step, and the proxy does not exist during
-the build.
+The feature cannot add the block itself — a feature's `containerEnv` becomes a Dockerfile `ENV`
+placed before its own install step, and the proxy does not exist during the build.
 
 The block is the same on every machine. No subnet is in `NO_PROXY`: the proxy forwards to the
 container's local subnets by address itself. Only two things follow an option — the port follows

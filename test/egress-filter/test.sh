@@ -59,34 +59,26 @@ check "it is readable without root" bash -c '
     head -1 /etc/devcontainer/egress-filter/allowlist.txt >/dev/null || { echo "cannot read as $(whoami)"; exit 1; }'
 
 # /etc/environment and /etc/profile.d reach a login shell and the VS Code environment probe, and
-# nothing else. A process started by a plain `docker exec` gets neither, and only the project's
-# devcontainer.json can close that gap, so status has to report which of the two states this
-# container is in -- and report it from line 6 of the state file, because this runs unprivileged.
+# VS Code applies the probe to the extension host. What neither reaches is a bare `docker exec`
+# from outside VS Code, and only the project's devcontainer.json can close that gap. So status
+# reports which state this container is in, in one line, and points at the README for the rest --
+# from lines 6 and 7 of the state file, because this runs unprivileged.
 #
-# Either state is correct here, which is why this checks for the line rather than for an answer.
-# This suite declares no containerEnv, so a plain host reports NOT SET. On a machine where the
-# suite itself runs inside a filtered container the answer names the outer proxy instead, because
-# the outer egress-filter writes a proxies block into the docker client config and docker puts it on
-# PID 1 of every container it starts. The container-env scenario pins the positive case.
-check "status reports whether the container environment carries the proxy" bash -c '
+# Either state is correct here. This suite declares no containerEnv, so a plain host reports "not
+# set". On a machine where the suite itself runs inside a filtered container the line names the
+# outer proxy instead, because the outer egress-filter writes a proxies block into the docker client
+# config and docker puts it on PID 1 of every container it starts. The container-env scenario pins
+# the positive case.
+check "status reports the container environment in one line and no more" bash -c '
     out=$(egress-status | tee /dev/stderr)
     echo "$out" | grep -qE "container env +[A-Za-z0-9]" || { echo "no container env line"; exit 1; }
-    if echo "$out" | grep -qE "container env +set"; then
-        echo "$out" | grep -q "add containerEnv" && { echo "the warning is printed anyway"; exit 1; }
-        echo "  the environment names this proxy, so there is no warning"
-        exit 0
+    echo "$out" | grep -q "^!!!" && { echo "a warning block, which was retired"; exit 1; }
+    if echo "$out" | grep -qE "container env +set -- "; then
+        echo "  the environment names this proxy"; exit 0
     fi
-    # The warning has to carry a block somebody can paste, with this container own port and subnets
-    # already filled in. A block copied from the README would carry neither.
-    echo "$out" | grep -qE "(add|update) containerEnv in .devcontainer/devcontainer.json" ||
-        { echo "no warning, and no proxy in the environment either"; exit 1; }
-    echo "$out" | grep -q "\"HTTP_PROXY\": \"http://127.0.0.1:3128\"" ||
-        { echo "the block does not name this proxy"; exit 1; }
-    # No subnet in it. The block has to be the same on every machine, and it is the proxy that
-    # reaches the local subnets by address -- see the next check.
-    echo "$out" | grep -q "\"NO_PROXY\": \"localhost,127.0.0.1,::1\"" ||
-        { echo "the suggested NO_PROXY is not the static list"; exit 1; }
-    echo "  the block to paste carries the static NO_PROXY"'
+    echo "$out" | grep -E "container env +" | grep -q "see README" ||
+        { echo "the line does not point at the README"; exit 1; }
+    echo "  one line, and it points at the README"'
 
 # A client that reads HTTP_PROXY sends a request for a peer to the proxy. The firewall lets the peer
 # through directly, and that used to be the only route: the proxy denied the address for not being

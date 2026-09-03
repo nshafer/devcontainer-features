@@ -52,12 +52,11 @@
     "ghcr.io/devcontainers/features/github-cli:1": {}
   },
 
-  // The proxy address, on the container itself. /etc/environment and /etc/profile.d/ carry it too,
-  // but PAM reads the first and a login shell reads the second, so `docker exec sh -c ...` from
-  // outside gets neither and every request it makes is refused. The variables a bare exec inherits
-  // are the ones docker stored when the container was created, and this block is what puts them
-  // there. VS Code extensions that start a process this way -- the Claude extension among them --
-  // depend on it.
+  // Optional, and here because this repo uses `devc exec`. /etc/environment and /etc/profile.d/
+  // carry the proxy address too: PAM reads the first, a login shell reads the second, and VS Code
+  // applies its environment probe to the extension host, so everything VS Code starts is fine
+  // without this. A bare `docker exec sh -c ...` from outside reads neither file and inherits only
+  // what docker stored when the container was created, which is what this block puts there.
   //
   // The feature cannot do this for you. A feature's containerEnv becomes a Dockerfile ENV placed
   // directly before that feature's install step, and the proxy does not exist during the build, so

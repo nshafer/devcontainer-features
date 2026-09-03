@@ -7,8 +7,8 @@
 # address pattern for a name and denies it. This scenario names db and redis in the option and not
 # in the block.
 #
-# Two things have to happen. status has to say so and print the block to paste, and /etc/environment
-# has to end up with the complete list, because the CLI appends the container environment to that
+# Two things have to happen. status has to say so in one line, and /etc/environment has to end up
+# with the complete list, because the CLI appends the container environment to that
 # file after this feature's entrypoint has run.
 set -e
 source dev-container-features-test-lib
@@ -18,18 +18,12 @@ check "the block does not repeat the noProxy names" bash -c '
     echo "  block says: $np"
     case ",$np," in *,db,*|*,redis,*) echo "the block carries the names after all"; exit 1 ;; esac'
 
-check "status reports the block as incomplete" bash -c '
+check "status names what the block misses, in one line" bash -c '
     out=$(egress-status | tee /dev/stderr)
-    echo "$out" | grep -qE "container env +set, but NO_PROXY is incomplete" ||
-        { echo "status calls it fine"; exit 1; }
-    echo "$out" | grep -q "update containerEnv in .devcontainer/devcontainer.json" ||
-        { echo "no warning"; exit 1; }
-    echo "$out" | grep -qE "missing these entries" || { echo "the warning does not say what is missing"; exit 1; }
-    echo "$out" | grep -A1 "missing these entries" | grep -q "db redis" ||
-        { echo "the warning does not name db and redis"; exit 1; }
-    echo "$out" | grep -q "\"NO_PROXY\": \"localhost,127.0.0.1,::1,db,redis\"" ||
-        { echo "the block to paste does not carry the names"; exit 1; }
-    echo "  the warning names db and redis, and the block to paste carries them"'
+    echo "$out" | grep -qE "container env +set, but NO_PROXY misses: db redis \(see README\)" ||
+        { echo "status does not name db and redis"; exit 1; }
+    echo "$out" | grep -q "^!!!" && { echo "a warning block, which was retired"; exit 1; }
+    echo "  one line, and it names db and redis"'
 
 # pam_env takes the last assignment in the file. The CLI appends the container environment after the
 # entrypoint has run, so the watcher is what puts the complete list back at the end.

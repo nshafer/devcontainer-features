@@ -29,7 +29,7 @@ Default-deny outbound networking, with a hostname allowlist merged from a global
 
 ## Host setup
 
-Three steps. Step 1 is once per machine, steps 2 and 3 are once per project.
+Two steps, and an optional third. Step 1 is once per machine, the others are once per project.
 
 ### 1. Create the directory on the host
 
@@ -75,10 +75,17 @@ mount is missing, and warns again when it is read-write.
 create it, so do step 1 before step 2. With no mount at all the container starts as usual, the
 global list is simply not a source, and `egress-status` says `global: NOT MOUNTED`.
 
-### 3. Add the proxy to the container environment
+### 3. Optional: add the proxy to the container environment
 
-Paste this into the same `.devcontainer/devcontainer.json`, beside `mounts`. It works for a compose
-project too: the CLI renders `containerEnv` into its override file as `environment`.
+Skip this for VS Code. The feature writes the proxy variables to `/etc/profile.d` and
+`/etc/environment`, the VS Code environment probe reads them, and VS Code applies the probe to the
+extension host. Every extension and every terminal has the proxy without this step.
+
+Add it when something starts a process with a bare `docker exec` from outside VS Code — a CI step,
+a script, `devc exec sh`. Such a process inherits the container environment and nothing else, so it
+gets no proxy and every connection it makes is refused. Paste this into the same
+`.devcontainer/devcontainer.json`, beside `mounts`. It works for a compose project too: the CLI
+renders `containerEnv` into its override file as `environment`.
 
 ```jsonc
 "containerEnv": {
@@ -91,18 +98,15 @@ project too: the CLI renders `containerEnv` into its override file as `environme
 }
 ```
 
-Without it, a process that VS Code starts, and any process started with `docker exec`, gets no proxy
-and every connection it makes is refused. A terminal is not affected. See
-[Processes started by `docker exec`](#processes-started-by-docker-exec) for why the feature cannot
-add this for you.
+See [Processes started by `docker exec`](#processes-started-by-docker-exec) for what reaches which
+process, and for why the feature cannot add this for you.
 
 The block is the same on every machine. No subnet is in `NO_PROXY`, because the proxy forwards to
 this container's local subnets by address itself. Two things in it follow an option, and only those:
 
 - **The port** follows `proxyPort`.
 - **`NO_PROXY`** repeats the names from `noProxy`: `"localhost,127.0.0.1,::1,db,redis"` for
-  `"noProxy": "db,redis"`. `egress-status` prints the whole block with both filled in, so paste it
-  from there.
+  `"noProxy": "db,redis"`. `egress-status` names any that are missing.
 
 This feature also needs `sandbox` and its sudo drop. A remote user with sudo runs `iptables -F` and
 the whole filter is gone. Use the two features together.
@@ -474,8 +478,9 @@ holds after that.
 
 ### Processes started by `docker exec`
 
-**Add `containerEnv` to your own `devcontainer.json`, or a bare `docker exec` gets no proxy at
-all.** The feature writes the proxy variables to two files, and a process has to read one of them:
+**A bare `docker exec` from outside VS Code gets no proxy unless your `devcontainer.json` carries
+`containerEnv`. Everything VS Code starts is fine without it.** The feature writes the proxy
+variables to two files, and a process has to read one of them:
 
 | channel | who reads it | written |
 | --- | --- | --- |
@@ -483,9 +488,11 @@ all.** The feature writes the proxy variables to two files, and a process has to
 | `/etc/environment` | PAM, so a `su` session too | at container start |
 | `containerEnv` in your `devcontainer.json` | every process in the container, `docker exec` included | by you |
 
-A terminal goes through both, so `HTTP_PROXY` is there and everything works. A process that VS Code
-or a tool starts with a plain `docker exec` reads neither, and the difference is visible from the
-host:
+A terminal goes through both, so `HTTP_PROXY` is there and everything works. So does the extension
+host: VS Code runs the probe once at server start and applies the result to it, and measured in a
+container of this feature, the extension host carries all six variables while the server process
+that started it carries none. A process that a tool starts with a plain `docker exec` from outside
+reads neither file, and the difference is visible from the host:
 
 ```console
 $ docker exec my-container sh -c 'env | grep -ci proxy'
@@ -566,20 +573,21 @@ the block carries both, and dropping a pair only costs you a client.
 `status` reports which of three states this container is in:
 
 ```
-container env  set -- a plain docker exec inherits the proxy
-container env  NOT SET -- see the warning below
-container env  http://172.18.0.1:3128 -- another proxy, see the warning below
+container env  set -- a bare docker exec inherits the proxy
+container env  not set -- fine for VS Code, not for a bare docker exec (see README)
+container env  http://172.18.0.1:3128 -- another proxy, refused by the firewall (see README)
 ```
 
 A fourth state is the one that costs the most to find. The block names this proxy and its `NO_PROXY`
 does not repeat a name from the `noProxy` option:
 
 ```
-container env  set, but NO_PROXY is incomplete -- see the warning below
+container env  set, but NO_PROXY misses: db redis (see README)
 ```
 
-Every state except the first prints the whole block to paste, with this container's own port and
-subnets already in it. Copy it from there rather than from this page.
+One line each, and this page is the README they point at. The block to paste is in
+[step 3](#3-optional-add-the-proxy-to-the-container-environment), and only the port and the
+`noProxy` names in it ever change.
 
 The third state is a container of a filtered outer container. The outer feature writes a proxies
 block into the docker client config, and Docker puts it on PID 1 of everything it starts, so
@@ -616,8 +624,7 @@ from an option, and only those:
   to chain to. Set `upstreamProxy` to the outer address instead. See
   [A dev container inside a dev container](#a-dev-container-inside-a-dev-container).
 
-`status` prints the block with the port and the names filled in, which is why it is the copy worth
-taking.
+`status` names what the block misses, in one line, and leaves the block itself to step 3.
 
 ### Building a list from evidence
 

@@ -1224,14 +1224,6 @@ PY
     log "containers started by the inner daemon are pointed at $url"
 }
 
-# The block at the bottom of `status`, printed only when it is needed.
-#
-# Deliberately loud and deliberately complete. The symptom this prevents is the expensive one: a
-# process that VS Code or a tool starts with `docker exec` reads neither /etc/environment nor
-# /etc/profile.d, so it gets no proxy and every connection it makes is refused. That looks like
-# network trouble and never like a missing variable -- a timeout, a hang, a TLS error, a registry
-# that is "down" -- and a terminal in the same container works perfectly the whole time.
-#
 # What the container environment's NO_PROXY is missing, against the list this feature writes.
 #
 # Membership and not string equality: an extra entry and another order are both fine, and only an
@@ -1250,59 +1242,6 @@ no_proxy_missing() {
     echo "$out"
 }
 
-# $1 is the state from the container environment, $2 the entries its NO_PROXY does not carry.
-container_env_advice() {
-    local cenv="$1" missing="$2" url="http://127.0.0.1:$PROXY_PORT" np verb="add"
-    np="$(no_proxy_list)"
-    [ "$cenv" = "$url" ] && verb="update"
-    echo
-    echo "!!! ==========================================================================="
-    echo "!!! egress-filter: $verb containerEnv in .devcontainer/devcontainer.json"
-    echo "!!!"
-    if [ "$cenv" = "$url" ]; then
-        echo "!!! This container's environment names the proxy, and its NO_PROXY is"
-        echo "!!! missing these entries:"
-        echo "!!!   $missing"
-        echo "!!! A process that reads it sends a request for that peer to the proxy,"
-        echo "!!! which has no address pattern for a name and denies it. The peer"
-        echo "!!! answers from a terminal and fails from a VS Code extension."
-    elif [ "$cenv" != none ]; then
-        echo "!!! This container's environment names another proxy:"
-        echo "!!!   $cenv"
-        echo "!!! This allowlist does not apply to it, and the firewall refuses a direct"
-        echo "!!! connection to it, so a process that uses it reaches nothing."
-    else
-        echo "!!! This container's environment does not name the proxy."
-    fi
-    echo "!!!"
-    echo "!!! A process that VS Code starts, and any process started with docker exec,"
-    echo "!!! reads neither /etc/environment nor /etc/profile.d. It carries the"
-    echo "!!! container environment and nothing else. A terminal is not affected,"
-    echo "!!! because a login shell reads both files, which is what makes this one"
-    echo "!!! expensive to find: a timeout, a hang, a TLS error, or a registry that"
-    echo "!!! looks down, in one process and not in the next."
-    echo "!!!"
-    echo "!!! ${verb^} this block, then rebuild the container:"
-    echo "!!!"
-    echo "!!!   \"containerEnv\": {"
-    echo "!!!     \"HTTP_PROXY\": \"$url\","
-    echo "!!!     \"HTTPS_PROXY\": \"$url\","
-    echo "!!!     \"http_proxy\": \"$url\","
-    echo "!!!     \"https_proxy\": \"$url\","
-    echo "!!!     \"NO_PROXY\": \"$np\","
-    echo "!!!     \"no_proxy\": \"$np\""
-    echo "!!!   }"
-    echo "!!!"
-    echo "!!! The block is the same on every machine. No subnet is in NO_PROXY: the"
-    echo "!!! proxy forwards to this container's local subnets by address itself."
-    echo "!!! Only the names from the noProxy option are project-specific, and the"
-    echo "!!! port follows the proxyPort option. Change either with the block."
-    echo "!!!"
-    echo "!!! This feature cannot add it for you. A feature's containerEnv becomes a"
-    echo "!!! Dockerfile ENV placed before its own install step, where it would point"
-    echo "!!! every later apt-get at a proxy that does not exist during the build."
-    echo "!!! ==========================================================================="
-}
 
 status() {
     echo "egress-filter:"
@@ -1386,16 +1325,16 @@ status() {
     case "$cenv" in
         '') ;;
         none)
-            printf '  %-14s NOT SET -- see the warning below\n' "container env" ;;
+            printf '  %-14s not set -- fine for VS Code, not for a bare docker exec (see README)\n' \
+                "container env" ;;
         "$want")
             if [ -n "$missing" ]; then
-                printf '  %-14s set, but NO_PROXY is incomplete -- see the warning below\n' \
-                    "container env"
+                printf '  %-14s set, but NO_PROXY misses: %s (see README)\n' "container env" "$missing"
             else
-                printf '  %-14s set -- a plain docker exec inherits the proxy\n' "container env"
+                printf '  %-14s set -- a bare docker exec inherits the proxy\n' "container env"
             fi ;;
         *)
-            printf '  %-14s %s -- another proxy, see the warning below\n' \
+            printf '  %-14s %s -- another proxy, refused by the firewall (see README)\n' \
                 "container env" "$cenv" ;;
     esac
 
@@ -1425,13 +1364,6 @@ status() {
         "$( [ -r "$FILTER_FILE" ] && wc -l < "$FILTER_FILE" || echo 0 )" "$ALLOWLIST_FILE"
     [ -r "$SOURCES_FILE" ] && sed 's/^/                 /' "$SOURCES_FILE"
 
-    # Last, and only when there is something to do about it. An empty answer is a state file from
-    # an older version, where a block telling somebody to change their config would be a guess.
-    case "$cenv" in
-        '') ;;
-        "$want") [ -n "$missing" ] && container_env_advice "$cenv" "$missing" ;;
-        *) container_env_advice "$cenv" "$missing" ;;
-    esac
 }
 
 # Watches the global list, and *only* the global list. This is the part to be careful about.
