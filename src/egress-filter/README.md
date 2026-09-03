@@ -29,7 +29,7 @@ Default-deny outbound networking, with a hostname allowlist merged from a global
 
 ## Host setup
 
-Two steps. Step 1 is once per machine, step 2 is once per project.
+Three steps. Step 1 is once per machine, steps 2 and 3 are once per project.
 
 ### 1. Create the directory on the host
 
@@ -74,6 +74,35 @@ mount is missing, and warns again when it is read-write.
 **A bind mount whose source does not exist stops the container from starting.** Docker does not
 create it, so do step 1 before step 2. With no mount at all the container starts as usual, the
 global list is simply not a source, and `egress-status` says `global: NOT MOUNTED`.
+
+### 3. Add the proxy to the container environment
+
+Paste this into the same `.devcontainer/devcontainer.json`, beside `mounts`. It works for a compose
+project too: the CLI renders `containerEnv` into its override file as `environment`.
+
+```jsonc
+"containerEnv": {
+  "HTTP_PROXY": "http://127.0.0.1:3128",
+  "HTTPS_PROXY": "http://127.0.0.1:3128",
+  "http_proxy": "http://127.0.0.1:3128",
+  "https_proxy": "http://127.0.0.1:3128",
+  "NO_PROXY": "localhost,127.0.0.1,::1,172.17.0.0/16",
+  "no_proxy": "localhost,127.0.0.1,::1,172.17.0.0/16"
+}
+```
+
+Without it, a process that VS Code starts, and any process started with `docker exec`, gets no proxy
+and every connection it makes is refused. A terminal is not affected. See
+[Processes started by `docker exec`](#processes-started-by-docker-exec) for why the feature cannot
+add this for you.
+
+Two values in the block are yours to keep in step:
+
+- **The port**, with the `proxyPort` option.
+- **`NO_PROXY`**, with the subnets the firewall opens. `172.17.0.0/16` above is the docker default
+  bridge, which is what a single-container devcontainer usually gets. A compose project or a named
+  network gets another one. `egress-status` names the missing subnets and prints the whole block
+  with the current values, so paste it from there whenever it says the block is out of date.
 
 This feature also needs `sandbox` and its sudo drop. A remote user with sudo runs `iptables -F` and
 the whole filter is gone. Use the two features together.
@@ -370,6 +399,22 @@ address back and chain the proxy to itself. A self-chain is caught and dropped e
 The address the outer container hands down is its own, and `docker run` copies it in — see
 `config.json` above. So a nested container needs no configuration for this to work.
 
+**The outer proxy is also reachable directly, and the firewall keeps everything but the proxy away
+from it.** That address sits on a local network, and `localNetworks: auto` opens local networks by
+default. Without a rule, anything in the inner container connects to the outer proxy itself and is
+filtered by the *outer* list — the wider of the two, because the inner one is applied on top of it.
+So the chain rejects that address for every uid except the proxy's, above the local-network accepts:
+
+```
+-A DEVCONTAINER_EGRESS -d 172.18.0.1/32 -p tcp --dport 3128 -m owner ! --uid-owner 995 -j REJECT
+-A DEVCONTAINER_EGRESS -d 172.18.0.0/16 -j ACCEPT
+```
+
+Both addresses are covered: the upstream this proxy chains to, and whatever `HTTP_PROXY` on PID 1
+names. They are usually the same one. The proxy still chains through it and nothing else reaches it.
+A proxy on `127.0.0.1` is the one exception, because the loopback accept sits above every rule in
+the chain and narrowing it would close the route to this feature's own proxy.
+
 **One client shape does not survive the extra hop, and busybox is the one that sends it.** Alpine's
 `wget` cannot do TLS through a proxy, so for an `https://` URL it sends `GET https://host/...`
 instead of a `CONNECT`. A single proxy answers that on its own. Forwarding it upstream turns the
@@ -383,6 +428,153 @@ hostname exactly like this one, so an image that pulls from a host you have not 
 same way — read `egress-denied`. And the proxy variables that reach a container are the ones in
 `config.json`, so `docker run -e HTTP_PROXY=` clears them; the `DOCKER-USER` deny is what still
 holds after that.
+
+### Processes started by `docker exec`
+
+**Add `containerEnv` to your own `devcontainer.json`, or a bare `docker exec` gets no proxy at
+all.** The feature writes the proxy variables to two files, and a process has to read one of them:
+
+| channel | who reads it | written |
+| --- | --- | --- |
+| `/etc/profile.d/00-devcontainer-egress-filter.sh` | a login shell, and the VS Code environment probe | at build time, into the image |
+| `/etc/environment` | PAM, so a `su` session too | at container start |
+| `containerEnv` in your `devcontainer.json` | every process in the container, `docker exec` included | by you |
+
+A terminal goes through both, so `HTTP_PROXY` is there and everything works. A process that VS Code
+or a tool starts with a plain `docker exec` reads neither, and the difference is visible from the
+host:
+
+```console
+$ docker exec my-container sh -c 'env | grep -ci proxy'
+0
+```
+
+**Why the profile.d file goes into the image.** VS Code execs its server into the container as soon
+as the container runs, which can be seconds before this feature's entrypoint gets a turn:
+
+```
+19:05:56.0  container PID 1 starts
+19:05:57.6  vscode-server starts
+19:05:58.0  egress-filter entrypoint begins
+19:05:58.4  writes /etc/profile.d/00-devcontainer-egress-filter.sh
+```
+
+The server runs its environment probe at start — a login shell, by default — and what that probe
+returns is what the extension host and every process it starts carry for the life of the window. A
+probe that ran before the file existed finds no proxy, and nothing corrects it later: the terminal
+you open afterwards works, and the extension beside it does not. So `install.sh` writes the file
+into the image and the ordering stops mattering. `up` rewrites it at container start with the real
+local subnets, and only when the content changes.
+
+`/etc/environment` stays at container start on purpose. `pam_env` reads it for `su`, and a build-time
+copy would point a later feature that installs anything as the remote user at a proxy that does not
+exist yet.
+
+**The CLI writes to `/etc/environment` as well, and it writes last.** After the entrypoint runs, it
+appends the whole container environment to that file — `containerEnv` included. `pam_env` takes the
+last assignment, so a `containerEnv` with a stale `NO_PROXY` overrides the complete list this feature
+wrote a second earlier. Two rules follow from that, and both are in `write_proxy_env`:
+
+- When the container environment already carries the right values, the feature writes no block at
+  all. The CLI's copy says the same thing, and a second copy of every variable only confuses whoever
+  opens the file next.
+- When it does not, the watcher rewrites the block every couple of seconds until it is the last one
+  in the file. That fixes a login shell and a `su` session. It cannot fix a process started with
+  `docker exec`, which never reads the file — only `containerEnv` reaches that one, which is why
+  `status` reports the mismatch instead of quietly repairing it.
+
+**`containerEnv` ends the race rather than shortening it.** With the block in place the server
+inherits the proxy from the container config at the moment it is exec'd. No probe, no file, no
+ordering to lose.
+
+**Expect connection failures in exactly those processes until you add the block.** A VS Code
+extension, a language server, a task, a CI step, anything started with `docker exec` — each one gets
+no proxy, and the firewall refuses every connection it makes. What you see is a timeout, a hang, a
+TLS error, or a registry that looks down. What you do not see is a missing variable, and a terminal
+in the same container keeps working the whole time, which is what makes this one expensive to find.
+
+The variables such a process inherits are the ones Docker stored when the container was created —
+the image `ENV`, plus every `-e` on `docker run`. Nothing inside a running container can add to that
+set. Only the project config can:
+
+```jsonc
+"containerEnv": {
+  "HTTP_PROXY": "http://127.0.0.1:3128",
+  "HTTPS_PROXY": "http://127.0.0.1:3128",
+  "http_proxy": "http://127.0.0.1:3128",
+  "https_proxy": "http://127.0.0.1:3128",
+  "NO_PROXY": "localhost,127.0.0.1,::1",
+  "no_proxy": "localhost,127.0.0.1,::1"
+}
+```
+
+**Both cases earn their place.** `curl` ignores an uppercase `HTTP_PROXY` on purpose: a CGI request
+header arrives under that name, and honouring it was the httpoxy vulnerability. So plain HTTP needs
+`http_proxy` in lowercase. Measured in a container of this feature, against a host on no list:
+
+| set | plain HTTP through the proxy |
+| --- | --- |
+| `HTTP_PROXY` alone | `000` — curl went direct and the firewall rejected it |
+| `http_proxy` alone | `403` — curl used the proxy, which denied the host |
+
+Uppercase is the spelling most other clients document, and `python`, `go` and `git` read either. So
+the block carries both, and dropping a pair only costs you a client.
+
+`status` reports which of three states this container is in:
+
+```
+container env  set -- a plain docker exec inherits the proxy
+container env  NOT SET -- see the warning below
+container env  http://172.18.0.1:3128 -- another proxy, see the warning below
+```
+
+A fourth state is the one that costs the most to find. The block names this proxy and its `NO_PROXY`
+has fallen behind the subnets the firewall opened:
+
+```
+container env  set, but NO_PROXY is out of date -- see the warning below
+```
+
+Every state except the first prints the whole block to paste, with this container's own port and
+subnets already in it. Copy it from there rather than from this page.
+
+The third state is a container of a filtered outer container. The outer feature writes a proxies
+block into the docker client config, and Docker puts it on PID 1 of everything it starts, so
+`HTTP_PROXY` is already there and it names the *outer* proxy. That proxy applies the outer list and
+not this one, so the firewall refuses a direct connection to it from every uid but the proxy's —
+see [A dev container inside a dev container](#a-dev-container-inside-a-dev-container).
+
+**Why the feature cannot add it for you.** The CLI emits a feature's `containerEnv` as a Dockerfile
+`ENV`, directly before that feature's own install step:
+
+```dockerfile
+ENV HTTP_PROXY=http://127.0.0.1:3128
+RUN ... ./devcontainer-features-install.sh   # egress-filter
+RUN ... ./devcontainer-features-install.sh   # every feature after it
+```
+
+The proxy starts at container start, not during the build, so that address refuses every connection.
+`apt-get` inside this feature's `install.sh` fails, and so does every feature installed after it. A
+project `containerEnv` has none of that problem: the CLI passes it as `docker run -e`, and the build
+never sees it.
+
+**The block is static, and three things in it drift.** `containerEnv` is a fixed string in a config
+file. It cannot read an option and it cannot read the network, so nothing keeps it in step for you:
+
+- **The port.** Change it with the `proxyPort` option, never on its own.
+- **`NO_PROXY`, against `localNetworks`.** `up` works out this container's own subnets at container
+  start and writes the full list to `/etc/environment`. The block cannot do that, so it carries the
+  subnets as they were when you copied it. Update it whenever `localNetworks` changes, whenever this
+  container joins another network, and whenever a compose service moves. A peer that is missing from
+  the list goes to the proxy, which denies it for not being on the allowlist. A service reached by
+  name — `db`, `redis` — belongs in the `noProxy` option and in this block, under both spellings.
+- **The upstream, in a nested dev container.** The outer proxy address reaches the inner container in
+  `HTTP_PROXY`, which is the variable this block overwrites, so `upstreamProxy: auto` finds nothing
+  to chain to. Set `upstreamProxy` to the outer address instead. See
+  [A dev container inside a dev container](#a-dev-container-inside-a-dev-container).
+
+`status` prints the block with the current port and the current subnets filled in, which is why it
+is the copy worth taking.
 
 ### Building a list from evidence
 

@@ -243,32 +243,47 @@ build_list() {
 # handed this container and nothing inside it can rewrite. Deliberately not this script's own
 # environment: /etc/environment names *this* proxy, so a second `up` run from a shell would read our
 # own address back and chain us to ourselves.
-upstream_proxy() {
-    local raw host_port
-    case "$UPSTREAM_PROXY" in
-        off | none | false) return 0 ;;
-        auto | '')
-            # Readability tested first: the shell reports a refused redirection itself, and
-            # 2>/dev/null on the pipeline does not cover that. `status` runs unprivileged and would
-            # otherwise print a permission error every time.
-            [ -r /proc/1/environ ] || return 0
-            raw="$(tr '\0' '\n' < /proc/1/environ 2>/dev/null |
-                   sed -n 's/^\(HTTP_PROXY\|http_proxy\)=//p' | head -1)"
-            ;;
-        *) raw="$UPSTREAM_PROXY" ;;
-    esac
+# http://host:port/ -> host:port, and nothing at all for our own address.
+#
+# tinyproxy takes a bare address, and a scheme or a trailing slash on the Upstream line stops it
+# starting. The two callers below both want the same shape: the upstream to chain to, and the
+# address the firewall has to keep everyone else away from.
+proxy_host_port() {
+    local raw="${1:-}" host_port
     [ -n "$raw" ] || return 0
-    # http://host:port/ -> host:port. tinyproxy takes a bare address, and a scheme or a trailing
-    # slash on the Upstream line stops it starting at all.
     host_port="${raw#*://}"
     host_port="${host_port%%/*}"
     [ -n "$host_port" ] || return 0
     case "$host_port" in *:*) ;; *) host_port="$host_port:80" ;; esac
-    # Never ourselves. A proxy whose upstream is itself answers nothing and says nothing about why.
+    # Never ourselves. A proxy whose upstream is itself answers nothing and says nothing about why,
+    # and a firewall rule against our own address would close the only route out.
     case "$host_port" in
         127.0.0.1:"$PROXY_PORT" | localhost:"$PROXY_PORT" | "[::1]:$PROXY_PORT") return 0 ;;
     esac
     echo "$host_port"
+}
+
+upstream_proxy() {
+    local raw
+    case "$UPSTREAM_PROXY" in
+        off | none | false) return 0 ;;
+        auto | '') raw="$(container_env_proxy)" ;;
+        *) raw="$UPSTREAM_PROXY" ;;
+    esac
+    proxy_host_port "$raw"
+}
+
+# Every proxy in play except ours: the one we chain to, and whatever PID 1 names. Usually the same
+# address, and both are listed because they do not have to be -- an explicit upstreamProxy names one
+# the container environment does not.
+#
+# The firewall keeps every uid but the proxy's away from these, and that rule is not decoration. A
+# container of a filtered outer container gets the outer proxy address on PID 1, that address sits
+# on a local network, and localNetworks opens local networks by default. Without the rule, anything
+# in here reaches the outer proxy directly and is filtered by the outer list instead of this one --
+# a wider list by construction, because this one is applied on top of it.
+foreign_proxies() {
+    { upstream_proxy; proxy_host_port "$(container_env_proxy)"; } | sed '/^$/d' | sort -u
 }
 
 write_proxy_conf() {
@@ -685,6 +700,19 @@ apply_firewall() {
         flush_firewall "iptables refused the loopback rule"; return 1; }
     add_rule "established-connection" -m state --state ESTABLISHED,RELATED -j ACCEPT || {
         flush_firewall "the kernel has no xt_conntrack module"; return 1; }
+    # Before the local-network accepts, and that order is the whole point: a proxy on a local
+    # network forwards to the internet under a list that is not this one. See foreign_proxies.
+    #
+    # A failure here is a warning and not a teardown. The default deny below still stands, and what
+    # is lost is one narrow bypass that only exists when there is another proxy to reach.
+    local fp
+    while IFS= read -r fp; do
+        [ -n "$fp" ] || continue
+        add_rule "foreign-proxy" -p tcp -d "${fp%:*}" --dport "${fp##*:}" \
+            -m owner ! --uid-owner "$uid" -j REJECT --reject-with icmp-port-unreachable ||
+            warn "  $fp stays reachable directly, which goes around this allowlist"
+    done <<< "$(foreign_proxies)"
+
     # Peers on the container's own networks, by destination address only, so a packet bound for the
     # internet never matches -- it carries an address outside the subnet even though it leaves
     # through the same gateway.
@@ -752,10 +780,13 @@ apply_firewall() {
     fi
 
     # Line 1 is the marker, line 2 the resolvers that were actually pinned, line 3 the local
-    # subnets that were opened, line 5 the state of the inner daemon. Separate lines because status
-    # has to answer all of them and cannot query iptables without root.
-    { echo applied; echo "$pinned"; echo "$nets"; echo; echo "$docker_state"; } \
-        > "$STATE_FILE" 2>/dev/null
+    # subnets that were opened, line 5 the state of the inner daemon, line 6 the proxy the container
+    # environment names and line 7 the NO_PROXY beside it, if any. Separate lines because status has to answer all of them and
+    # cannot query iptables, or read PID 1's environ, without root.
+    local cenv cnp
+    cenv="$(container_env_state)"; cnp="$(container_env_np_state)"
+    { echo applied; echo "$pinned"; echo "$nets"; echo; echo "$docker_state"; echo "$cenv";
+      echo "$cnp"; } > "$STATE_FILE" 2>/dev/null
     chmod 0644 "$STATE_FILE" 2>/dev/null
     log "firewall applied: default deny, out via uid $uid only, dns=${pinned:-none}," \
         "local=${nets:-none}, docker=$docker_state"
@@ -776,7 +807,10 @@ flush_firewall() {
     iptables -D DOCKER-USER -j DEVCONTAINER_EGRESS_FWD 2>/dev/null
     iptables -F DEVCONTAINER_EGRESS_FWD 2>/dev/null
     iptables -X DEVCONTAINER_EGRESS_FWD 2>/dev/null
-    { echo absent; echo; echo; echo "${1:-}"; echo; } > "$STATE_FILE" 2>/dev/null
+    local cenv cnp
+    cenv="$(container_env_state)"; cnp="$(container_env_np_state)"
+    { echo absent; echo; echo; echo "${1:-}"; echo; echo "$cenv"; echo "$cnp"; } \
+        > "$STATE_FILE" 2>/dev/null
     chmod 0644 "$STATE_FILE" 2>/dev/null
     if [ -n "${1:-}" ]; then
         log "firewall removed: $1"
@@ -801,29 +835,97 @@ no_proxy_list() {
     echo "$no_proxy"
 }
 
-# Advisory, and labelled as such. Tools that honour it get working networking without being told;
-# tools that ignore it get REJECT instead of a silent bypass, which is the property that matters.
+# Advisory, and labelled as such. Tools that honour it get working networking without being told,
+# and tools that ignore it get REJECT instead of a silent bypass, which is the property that matters.
+#
+# $1 is "profile" to write the profile.d file alone, which is what install.sh asks for. Both files
+# are written only when the content changes, so a file that is already correct keeps its timestamp
+# and a build-time write survives the container start untouched.
 write_proxy_env() {
-    local url="http://127.0.0.1:$PROXY_PORT" no_proxy
+    local only="${1:-}" url="http://127.0.0.1:$PROXY_PORT" no_proxy f=/etc/profile.d/00-devcontainer-egress-filter.sh
     no_proxy="$(no_proxy_list)"
-    cat > /etc/profile.d/00-devcontainer-egress-filter.sh <<EOF
-# Installed by the egress-filter feature. The firewall is the control; this is the convenience.
+    local profile
+    profile="# Installed by the egress-filter feature. The firewall is the control, this is the convenience.
 export HTTP_PROXY=$url  http_proxy=$url
 export HTTPS_PROXY=$url https_proxy=$url
-export NO_PROXY=$no_proxy no_proxy=$no_proxy
-EOF
-    chmod 0644 /etc/profile.d/00-devcontainer-egress-filter.sh
-    # Read by PAM and by VS Code's environment probe, so terminals inherit it too.
+export NO_PROXY=$no_proxy no_proxy=$no_proxy"
+    if [ "$(cat "$f" 2>/dev/null)" != "$profile" ]; then
+        printf '%s\n' "$profile" > "$f"
+        chmod 0644 "$f"
+    fi
+    [ "$only" = profile ] && return 0
+
+    # Read by PAM, so a `su` session gets it too. Deliberately NOT written at build time: pam_env
+    # reads this file for `su`, and a later feature that installs anything as the remote user would
+    # then be pointed at a proxy that does not exist until the container starts.
+    #
+    # Two rules decide whether anything is written at all, and both exist because the CLI writes to
+    # this same file. After the entrypoint runs, it appends the whole container environment --
+    # containerEnv included -- so a block of ours ends up above one of its own.
+    #
+    # Nothing to add. The container environment already carries the right values, so the block the
+    # CLI writes says exactly what ours would. Writing ours as well leaves two copies of every
+    # variable in the file and explains nothing to whoever reads it next.
+    if [ "$(container_env_proxy)" = "$url" ] && [ "$(container_env_no_proxy)" = "$no_proxy" ]; then
+        return 0
+    fi
+    # Something to correct. pam_env takes the *last* assignment, so ours has to be the last one:
+    # written when the effective value is not already ours, and appended after everything else. The
+    # watcher calls this again every couple of seconds, which is what puts it after a block the CLI
+    # adds later. status reports the mismatch as well -- the file is the workaround, containerEnv is
+    # the fix.
+    [ "$(env_file_value HTTP_PROXY)" = "$url" ] &&
+        [ "$(env_file_value NO_PROXY)" = "$no_proxy" ] && return 0
+    local block
+    block="# devcontainer-egress-filter
+HTTP_PROXY=$url
+HTTPS_PROXY=$url
+http_proxy=$url
+https_proxy=$url
+NO_PROXY=$no_proxy
+no_proxy=$no_proxy"
     sed -i '/devcontainer-egress-filter/,+6d' /etc/environment 2>/dev/null
-    {
-        echo "# devcontainer-egress-filter"
-        echo "HTTP_PROXY=$url"
-        echo "HTTPS_PROXY=$url"
-        echo "http_proxy=$url"
-        echo "https_proxy=$url"
-        echo "NO_PROXY=$no_proxy"
-        echo "no_proxy=$no_proxy"
-    } >> /etc/environment
+    printf '%s\n' "$block" >> /etc/environment
+}
+
+# Whether the container's own environment carries the proxy address.
+#
+# The gap the two files above cannot close. PAM reads /etc/environment and a login shell reads
+# /etc/profile.d, so a terminal has HTTP_PROXY and `docker exec sh -c ...` from outside has nothing.
+# What a bare exec inherits is what docker stored when the container was created -- the image ENV,
+# plus every -e on docker run -- and nothing inside a running container can add to that set.
+#
+# So this reports and does not fix. The fix is a containerEnv block in the project's
+# devcontainer.json, and this feature cannot supply one: the CLI emits a feature's containerEnv as a
+# Dockerfile ENV placed before that feature's own install step, where it would point every apt-get
+# after it at a proxy that does not exist during the build. See NOTES.md.
+#
+# The value matters and not just its presence. A container of a filtered outer container already
+# has one: the outer feature writes a proxies block into the docker client config, and docker puts
+# it on PID 1 of everything it starts. That address is the *outer* proxy, so a process that uses it
+# is filtered by the outer list and not by this one. status says which of the two it found.
+#
+# Root only. PID 1 runs as root and nobody else may read its environ, which is why the answer goes
+# into the state file for the unprivileged `status` that runs later.
+container_env_var() {
+    [ -r /proc/1/environ ] || return 0
+    tr '\0' '\n' < /proc/1/environ 2>/dev/null |
+        sed -n "s/^\($1\|$2\)=//p" | head -1
+}
+
+container_env_proxy()    { container_env_var HTTP_PROXY http_proxy; }
+container_env_no_proxy() { container_env_var NO_PROXY no_proxy; }
+
+# Both answers, in the two lines the state file gives them. "none" and not an empty line, because an
+# empty line is a state file written by an older version and status has to tell those apart.
+container_env_state()    { local v; v="$(container_env_proxy)";    echo "${v:-none}"; }
+container_env_np_state() { local v; v="$(container_env_no_proxy)"; echo "${v:-none}"; }
+
+# What pam_env would end up with, which is the last assignment in the file and not the first. The
+# CLI appends the whole container environment to /etc/environment after this feature's entrypoint
+# has run, so an earlier block of ours loses to it. See write_proxy_env.
+env_file_value() {
+    sed -n "s/^$1=//p" /etc/environment 2>/dev/null | tail -1 | tr -d '"'
 }
 
 # Merges a proxies block into a JSON file, keeping whatever else is in it -- registry credentials in
@@ -1055,6 +1157,90 @@ PY
     log "containers started by the inner daemon are pointed at $url"
 }
 
+# The block at the bottom of `status`, printed only when it is needed.
+#
+# Deliberately loud and deliberately complete. The symptom this prevents is the expensive one: a
+# process that VS Code or a tool starts with `docker exec` reads neither /etc/environment nor
+# /etc/profile.d, so it gets no proxy and every connection it makes is refused. That looks like
+# network trouble and never like a missing variable -- a timeout, a hang, a TLS error, a registry
+# that is "down" -- and a terminal in the same container works perfectly the whole time.
+#
+# What the container environment's NO_PROXY is missing, given the subnets that are open.
+#
+# Membership and not string equality: an extra entry, another order and a service named in noProxy
+# are all fine, and only a subnet the firewall opened that the block does not name is a fault. A
+# client that reads the block sends a request for such a peer to the proxy, which denies it for not
+# being on the allowlist -- a peer that works from a terminal and fails from a VS Code extension.
+#
+# $1 is the container environment's NO_PROXY, $2 the subnets that are open.
+no_proxy_missing() {
+    local have="$1" net out=""
+    [ "$have" = none ] || [ -z "$have" ] && return 0
+    for net in $2; do
+        case ",$have," in *",$net,"*) ;; *) out="${out:+$out }$net" ;; esac
+    done
+    echo "$out"
+}
+
+# $1 is the state from the container environment, $2 the local subnets that are open, $3 the
+# subnets its NO_PROXY does not name.
+container_env_advice() {
+    local cenv="$1" nets="$2" missing="$3" url="http://127.0.0.1:$PROXY_PORT" net
+    local np="localhost,127.0.0.1,::1" verb="add"
+    for net in $nets; do np="$np,$net"; done
+    [ -n "$NO_PROXY_EXTRA" ] && np="$np,$NO_PROXY_EXTRA"
+    [ "$cenv" = "$url" ] && verb="update"
+    echo
+    echo "!!! ==========================================================================="
+    echo "!!! egress-filter: $verb containerEnv in .devcontainer/devcontainer.json"
+    echo "!!!"
+    if [ "$cenv" = "$url" ]; then
+        echo "!!! This container's environment names the proxy, and its NO_PROXY is out"
+        echo "!!! of date. It does not name these subnets, which the firewall opened:"
+        echo "!!!   $missing"
+        echo "!!! A process that reads it sends a request for a peer on one of them to"
+        echo "!!! the proxy, which denies it for not being on the allowlist. The peer"
+        echo "!!! answers from a terminal and fails from a VS Code extension."
+    elif [ "$cenv" != none ]; then
+        echo "!!! This container's environment names another proxy:"
+        echo "!!!   $cenv"
+        echo "!!! This allowlist does not apply to it, and the firewall refuses a direct"
+        echo "!!! connection to it, so a process that uses it reaches nothing."
+    else
+        echo "!!! This container's environment does not name the proxy."
+    fi
+    echo "!!!"
+    echo "!!! A process that VS Code starts, and any process started with docker exec,"
+    echo "!!! reads neither /etc/environment nor /etc/profile.d. It carries the"
+    echo "!!! container environment and nothing else. A terminal is not affected,"
+    echo "!!! because a login shell reads both files, which is what makes this one"
+    echo "!!! expensive to find: a timeout, a hang, a TLS error, or a registry that"
+    echo "!!! looks down, in one process and not in the next."
+    echo "!!!"
+    echo "!!! ${verb^} this block, then rebuild the container:"
+    echo "!!!"
+    echo "!!!   \"containerEnv\": {"
+    echo "!!!     \"HTTP_PROXY\": \"$url\","
+    echo "!!!     \"HTTPS_PROXY\": \"$url\","
+    echo "!!!     \"http_proxy\": \"$url\","
+    echo "!!!     \"https_proxy\": \"$url\","
+    echo "!!!     \"NO_PROXY\": \"$np\","
+    echo "!!!     \"no_proxy\": \"$np\""
+    echo "!!!   }"
+    echo "!!!"
+    echo "!!! NO_PROXY above holds this container's local subnets as they are now."
+    echo "!!! Keep it in step with the localNetworks option and with the networks"
+    echo "!!! this container joins. A peer that is missing from it goes to the proxy,"
+    echo "!!! which denies it for not being on the allowlist."
+    echo "!!!"
+    echo "!!! Keep the port in step with the proxyPort option as well."
+    echo "!!!"
+    echo "!!! This feature cannot add it for you. A feature's containerEnv becomes a"
+    echo "!!! Dockerfile ENV placed before its own install step, where it would point"
+    echo "!!! every later apt-get at a proxy that does not exist during the build."
+    echo "!!! ==========================================================================="
+}
+
 status() {
     echo "egress-filter:"
     if [ -n "$(proxy_pid)" ]; then
@@ -1124,6 +1310,33 @@ status() {
         printf '  %-14s none -- peers on the docker network are blocked too\n' "local"
     fi
 
+    # After the subnets, because one of the answers depends on them. Root reads PID 1 directly, and
+    # everyone else reads lines 6 and 7 of the state file. An empty line 6 is a state file from an
+    # older version, where saying nothing beats guessing.
+    local cenv cnp want="http://127.0.0.1:$PROXY_PORT" missing
+    if [ "$(id -u)" = 0 ]; then
+        cenv="$(container_env_state)"; cnp="$(container_env_np_state)"
+    else
+        cenv="$(sed -n 6p "$STATE_FILE" 2>/dev/null)"
+        cnp="$(sed -n 7p "$STATE_FILE" 2>/dev/null)"
+    fi
+    missing="$(no_proxy_missing "$cnp" "$nets")"
+    case "$cenv" in
+        '') ;;
+        none)
+            printf '  %-14s NOT SET -- see the warning below\n' "container env" ;;
+        "$want")
+            if [ -n "$missing" ]; then
+                printf '  %-14s set, but NO_PROXY is out of date -- see the warning below\n' \
+                    "container env"
+            else
+                printf '  %-14s set -- a plain docker exec inherits the proxy\n' "container env"
+            fi ;;
+        *)
+            printf '  %-14s %s -- another proxy, see the warning below\n' \
+                "container env" "$cenv" ;;
+    esac
+
     # Line 5, and only when there is an inner daemon to say anything about. The answer people need
     # here is not "is docker configured" but "does the filter reach what docker starts", so the
     # line says that and nothing else.
@@ -1149,6 +1362,14 @@ status() {
     printf '  %-14s %s patterns (%s)\n' "allowlist" \
         "$( [ -r "$FILTER_FILE" ] && wc -l < "$FILTER_FILE" || echo 0 )" "$ALLOWLIST_FILE"
     [ -r "$SOURCES_FILE" ] && sed 's/^/                 /' "$SOURCES_FILE"
+
+    # Last, and only when there is something to do about it. An empty answer is a state file from
+    # an older version, where a block telling somebody to change their config would be a guess.
+    case "$cenv" in
+        '') ;;
+        "$want") [ -n "$missing" ] && container_env_advice "$cenv" "$nets" "$missing" ;;
+        *) container_env_advice "$cenv" "$nets" "$missing" ;;
+    esac
 }
 
 # Watches the global list, and *only* the global list. This is the part to be careful about.
@@ -1198,6 +1419,9 @@ watch_daemon() {
     last_topo="$(topology_checksum)"
     while true; do
         sleep "${WATCH_INTERVAL:-2}"
+        # Cheap, and it writes only when there is something to correct. This is where a block the
+        # CLI appended after the entrypoint gets overtaken -- see write_proxy_env.
+        write_proxy_env
         current="$(lists_checksum)"
         if [ "$current" != "$last" ]; then
             last="$current"
@@ -1309,11 +1533,16 @@ up() {
             return 1
         }
     done
+    # First, and not after the proxy starts. VS Code execs its server into the container as soon as
+    # the container runs, which can be before this entrypoint gets a turn, and the environment probe
+    # it runs then decides what every extension it starts will carry. install.sh writes the same
+    # profile.d file into the image for that reason -- this call is what puts the real local subnets
+    # in it, and what writes /etc/environment. See write_proxy_env and the README.
+    write_proxy_env
     check_global_mount
     build_list
     write_proxy_conf
     start_proxy || return 1
-    write_proxy_env
     # Both before apply_firewall, and both before docker-init.sh gets its turn at the entrypoint
     # chain. A daemon.json written after dockerd has read one is a daemon.json that does nothing.
     docker_daemon_conf
@@ -1339,7 +1568,10 @@ case "${1:-status}" in
     # Write /etc/docker/daemon.json and nothing else. install.sh calls this at build time, where
     # there is no daemon to sync with and no container network to read a no-proxy list from.
     docker-conf) docker_daemon_conf ;;
+    # The proxy variables. `env profile` writes the profile.d file alone, which is the form
+    # install.sh uses at build time -- see write_proxy_env.
+    env)         write_proxy_env "${2:-}" ;;
     status)      status ;;
-    *)           echo "usage: egress.sh {up|build|reload|firewall|flush|watch|docker-conf|status}" >&2
+    *)           echo "usage: egress.sh {up|build|reload|firewall|flush|watch|docker-conf|env|status}" >&2
                  exit 2 ;;
 esac

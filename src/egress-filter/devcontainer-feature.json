@@ -1,6 +1,6 @@
 {
   "id": "egress-filter",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "name": "Egress filter (nshafer)",
   "description": "Default-deny outbound networking, with a hostname allowlist merged from a global list on the host, a per-project list in the repo, and a baseline that keeps VS Code working. Enforced by an in-container firewall, so an agent that ignores HTTP_PROXY simply cannot connect. Containers started by an inner Docker daemon are filtered too.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/egress-filter",

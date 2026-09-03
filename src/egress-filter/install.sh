@@ -162,4 +162,28 @@ if command -v dockerd >/dev/null 2>&1 || command -v docker >/dev/null 2>&1; then
     fi
 fi
 
+# The second thing that has to happen at build time, and for the same shape of reason.
+#
+# VS Code execs its server into the container as soon as the container is running, which can be
+# seconds before this feature's entrypoint gets a turn. The server runs its environment probe then
+# -- a login shell, by default -- and whatever that probe returns is what the extension host and
+# every process it starts carry for the life of the window. A probe that runs before the entrypoint
+# writes /etc/profile.d finds no proxy, and nothing later corrects it.
+#
+# So the file goes into the image here, and the ordering stops mattering. egress.sh rewrites it at
+# container start with the real local subnets, and only when the content changes.
+#
+# The profile.d file alone. /etc/environment is read by pam_env for `su`, so writing it here would
+# point a later feature that installs anything as the remote user at a proxy that does not exist
+# until the container starts.
+#
+# localNetworks is forced off for the same reason as above: the build container's routing table is
+# not the one this container will run on.
+if EGRESS_LOCAL_NETWORKS=off "$SHARE_DIR/egress.sh" env profile; then
+    echo "==> egress-filter: wrote /etc/profile.d/00-devcontainer-egress-filter.sh"
+else
+    echo "!!! egress-filter: could not write the profile.d file. A VS Code server that starts" >&2
+    echo "!!!   before this feature's entrypoint will carry no proxy." >&2
+fi
+
 echo "==> egress-filter: build stage done"

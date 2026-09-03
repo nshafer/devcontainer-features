@@ -65,4 +65,33 @@ check "a denied host is recorded as removed, not silently dropped" bash -c '
     # ...and it really is gone from what the proxy reads.
     ! grep -q "iana" /etc/devcontainer/egress-filter/allow.regex || { echo "still in allow.regex"; exit 1; }'
 
+# VS Code execs its server into the container as soon as the container runs, which can be seconds
+# before this feature's entrypoint gets a turn. The environment probe the server runs then decides
+# what the extension host and everything it starts carry, and nothing corrects it later. So the file
+# goes into the image at build time.
+#
+# Provable here and not in the other scenarios: localNetworks is off, so the subnets `up` discovers
+# add nothing, the content it would write is identical, and it leaves the file alone. The timestamp
+# is then the build, which is before the entrypoint ran.
+check "the profile.d file is in the image, so an early env probe finds it" bash -c '
+    f=/etc/profile.d/00-devcontainer-egress-filter.sh
+    grep -q "127.0.0.1:8888" "$f" || { cat "$f"; echo "the proxyPort option is not in it"; exit 1; }
+    ts=$(sed -n "s/^=== egress-filter entrypoint //p" /var/log/devcontainer/egress-filter.log | head -1)
+    [ -n "$ts" ] || { echo "no entrypoint timestamp in the log"; exit 1; }
+    start=$(date -d "$ts" +%s)
+    fm=$(stat -c %Y "$f")
+    echo "  written $((start - fm))s before the entrypoint ran"
+    [ "$fm" -lt "$start" ] || { echo "written at container start, not at build time"; exit 1; }'
+
+# The other half of the same property: /etc/environment is written at container start and not at
+# build time, because pam_env reads it for `su` and a later feature would then install through a
+# proxy that does not exist yet.
+check "/etc/environment carries the proxy, and was written at container start" bash -c '
+    grep -q "^HTTP_PROXY=http://127.0.0.1:8888$" /etc/environment || {
+        echo "no proxy in /etc/environment"; exit 1; }
+    ts=$(sed -n "s/^=== egress-filter entrypoint //p" /var/log/devcontainer/egress-filter.log | head -1)
+    fm=$(stat -c %Y /etc/environment)
+    [ "$fm" -ge "$(date -d "$ts" +%s)" ] || { echo "written at build time, which pam_env would apply"; exit 1; }
+    echo "  written by the entrypoint, as it must be"'
+
 reportResults

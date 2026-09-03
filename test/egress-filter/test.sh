@@ -58,6 +58,36 @@ check "status points at it, so it can be found" bash -c '
 check "it is readable without root" bash -c '
     head -1 /etc/devcontainer/egress-filter/allowlist.txt >/dev/null || { echo "cannot read as $(whoami)"; exit 1; }'
 
+# /etc/environment and /etc/profile.d reach a login shell and the VS Code environment probe, and
+# nothing else. A process started by a plain `docker exec` gets neither, and only the project's
+# devcontainer.json can close that gap, so status has to report which of the two states this
+# container is in -- and report it from line 6 of the state file, because this runs unprivileged.
+#
+# Either state is correct here, which is why this checks for the line rather than for an answer.
+# This suite declares no containerEnv, so a plain host reports NOT SET. On a machine where the
+# suite itself runs inside a filtered container the answer names the outer proxy instead, because
+# the outer egress-filter writes a proxies block into the docker client config and docker puts it on
+# PID 1 of every container it starts. The container-env scenario pins the positive case.
+check "status reports whether the container environment carries the proxy" bash -c '
+    out=$(egress-status | tee /dev/stderr)
+    echo "$out" | grep -qE "container env +[A-Za-z0-9]" || { echo "no container env line"; exit 1; }
+    if echo "$out" | grep -qE "container env +set"; then
+        echo "$out" | grep -q "add containerEnv" && { echo "the warning is printed anyway"; exit 1; }
+        echo "  the environment names this proxy, so there is no warning"
+        exit 0
+    fi
+    # The warning has to carry a block somebody can paste, with this container own port and subnets
+    # already filled in. A block copied from the README would carry neither.
+    echo "$out" | grep -qE "(add|update) containerEnv in .devcontainer/devcontainer.json" ||
+        { echo "no warning, and no proxy in the environment either"; exit 1; }
+    echo "$out" | grep -q "\"HTTP_PROXY\": \"http://127.0.0.1:3128\"" ||
+        { echo "the block does not name this proxy"; exit 1; }
+    for net in $(ip -4 route show scope link | awk "\$1 ~ /\\// { print \$1 }"); do
+        echo "$out" | grep -q "\"NO_PROXY\": .*$net" ||
+            { echo "$net is open but missing from the suggested NO_PROXY"; exit 1; }
+        echo "  $net is in the suggested NO_PROXY"
+    done'
+
 check "a missing global mount is named, not silently skipped" bash -c '
     egress-status | tee /dev/stderr | grep -q "global:   NOT MOUNTED"'
 

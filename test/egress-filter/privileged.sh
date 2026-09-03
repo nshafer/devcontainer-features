@@ -95,8 +95,30 @@ check "the chain lets exactly one uid out" bash -c '
     echo "$rules" | sed "s/^/  /"
     uid=$(id -u egressfilter)
     echo "$rules" | grep -q -- "--uid-owner $uid -j ACCEPT" || { echo "the proxy uid is not exempt"; exit 1; }
-    [ "$(echo "$rules" | grep -c -- "--uid-owner")" = 1 ] || { echo "another uid is exempt too"; exit 1; }
+    # Counted among the ACCEPTs only. The chain also carries a negated --uid-owner on a REJECT,
+    # which exempts nobody -- see the next check.
+    [ "$(echo "$rules" | grep -- "--uid-owner" | grep -c -- "-j ACCEPT")" = 1 ] ||
+        { echo "another uid is exempt too"; exit 1; }
     echo "$rules" | tail -1 | grep -q -- "-j REJECT" || { echo "the chain does not end in REJECT"; exit 1; }'
+
+# A proxy on a local network is a hole in the local-network accept: it forwards to the internet
+# under a list that is not this one. The rule only has something to match when there is another
+# proxy to reach, which is the case when this suite itself runs inside a filtered container.
+check "another proxy is kept away from every uid but the proxy's" bash -c '
+    rules=$(iptables -S DEVCONTAINER_EGRESS)
+    fp=$(tr "\0" "\n" < /proc/1/environ | sed -n "s/^HTTP_PROXY=//p" | head -1)
+    hp=${fp#*://}; hp=${hp%%/*}
+    case "$hp" in "" | 127.0.0.1:* | localhost:*)
+        echo "  PID 1 names no other proxy, so there is nothing to keep away from"; exit 0 ;;
+    esac
+    echo "  PID 1 names $hp"
+    echo "$rules" | grep -q -- "-d ${hp%:*}/32 -p tcp -m tcp --dport ${hp##*:} -m owner ! --uid-owner" || {
+        echo "$rules" | sed "s/^/  /"; echo "nothing keeps other uids away from $hp"; exit 1; }
+    # Above the local-network accept, or the accept decides first and the rule never runs.
+    rej=$(echo "$rules" | grep -n -- "! --uid-owner" | head -1 | cut -d: -f1)
+    acc=$(echo "$rules" | grep -n -- "^-A DEVCONTAINER_EGRESS -d .* -j ACCEPT" | head -1 | cut -d: -f1)
+    [ -z "$acc" ] || [ "$rej" -lt "$acc" ] || { echo "the reject sits below an accept"; exit 1; }
+    echo "  and it is above the accepts"'
 
 # The failure path, which is the one that rots unnoticed: a kernel with no xt_owner, which is what a
 # rootless runtime on an unprepared host gives you. Proven with a stub `iptables` first on PATH, so

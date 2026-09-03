@@ -52,14 +52,32 @@
     "ghcr.io/devcontainers/features/github-cli:1": {}
   },
 
-  // There used to be a containerEnv block here pointing dockerd at egress-filter's proxy, because
-  // the docker-in-docker entrypoint starts dockerd from the container environment and never reads
-  // the /etc/environment that egress-filter writes. Without it every `docker pull` the test harness
-  // made was rejected, and the failure read as a registry timeout.
+  // The proxy address, on the container itself. /etc/environment and /etc/profile.d/ carry it too,
+  // but PAM reads the first and a login shell reads the second, so `docker exec sh -c ...` from
+  // outside gets neither and every request it makes is refused. The variables a bare exec inherits
+  // are the ones docker stored when the container was created, and this block is what puts them
+  // there. VS Code extensions that start a process this way -- the Claude extension among them --
+  // depend on it.
   //
-  // egress-filter 2.1 writes /etc/docker/daemon.json itself, so the block is gone. It also filters
-  // the containers dockerd starts, which the OUTPUT chain never could -- those packets are
-  // FORWARDed. See the Docker section of the feature's README.
+  // The feature cannot do this for you. A feature's containerEnv becomes a Dockerfile ENV placed
+  // directly before that feature's install step, and the proxy does not exist during the build, so
+  // apt-get in every feature after it would fail. See "Processes started by docker exec" in the
+  // feature's README.
+  //
+  // Keep the port equal to the feature's proxyPort option, and NO_PROXY equal to the subnets the
+  // firewall opens. The two subnets below are the outer bridge and the inner daemon's bridge, and
+  // they are what docker hands this project on a normal machine. They are not guaranteed: another
+  // machine, another compose project or another network gets different ones, and `egress-status`
+  // then says the block is out of date and prints the current one to paste. That warning is the
+  // whole mechanism -- read it rather than assuming these two values travel.
+  "containerEnv": {
+    "HTTP_PROXY": "http://127.0.0.1:3128",
+    "HTTPS_PROXY": "http://127.0.0.1:3128",
+    "http_proxy": "http://127.0.0.1:3128",
+    "https_proxy": "http://127.0.0.1:3128",
+    "NO_PROXY": "localhost,127.0.0.1,::1,172.17.0.0/16,172.18.0.0/16",
+    "no_proxy": "localhost,127.0.0.1,::1,172.17.0.0/16,172.18.0.0/16"
+  },
 
   // git-config and egress-filter declare no mounts of their own -- a feature's mount metadata has
   // no read-only field, and every workaround for that depends on how the container is built. So the

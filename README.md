@@ -17,6 +17,54 @@ its link:
 | [`claude`](src/claude)                   | Installs the Claude Code CLI at build time.                                                        |
 | [`tidewave`](src/tidewave)               | Installs the Tidewave CLI and starts it on every container start.                                 |
 
+## Quick Setup
+
+Add to your `.devcontainer/devcontainer.json` (or `.devcontainer/devcontainer.local.json` if you use [local overrides](#use-with-local-overrides)):
+
+```jsonc
+{
+  "features": {
+    // Optional. Every feature here declares installsAfter common-utils, so if you use it, it runs
+    // first and they see the user it created. Give it the same username the container runs as.
+    "ghcr.io/devcontainers/features/common-utils:2": { "username": "devc" },
+
+    "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {},
+    "ghcr.io/nshafer/devcontainer-features/git-config:2": {},
+    "ghcr.io/nshafer/devcontainer-features/sandbox:2": {},
+    "ghcr.io/nshafer/devcontainer-features/egress-filter:2": { "presets": "debian,github,claude" },
+    "ghcr.io/nshafer/devcontainer-features/claude:1": {},
+    "ghcr.io/nshafer/devcontainer-features/tidewave:1": {}
+  },
+
+  // git-config and egress-filter read a mount that you declare and they do not. See step 2
+  "mounts": [
+    "type=bind,src=${localEnv:HOME}/.config/git,dst=/mnt/git-config,readonly",
+    "type=bind,src=${localEnv:HOME}/.config/egress-filter,dst=/mnt/egress-filter,readonly"
+  ],
+
+  // Global container environment for accurate usage of the egress proxy by all processes,
+  // including those started by `docker exec` and VS Code extensions
+  "containerEnv": {
+    "HTTP_PROXY": "http://127.0.0.1:3128",
+    "HTTPS_PROXY": "http://127.0.0.1:3128",
+    "http_proxy": "http://127.0.0.1:3128",
+    "https_proxy": "http://127.0.0.1:3128",
+    "NO_PROXY": "localhost,127.0.0.1,::1,172.17.0.0/16",
+    "no_proxy": "localhost,127.0.0.1,::1,172.17.0.0/16"
+  }
+}
+```
+
+If using a compose project, put the mounts in the compose file instead of `devcontainer.json`. See [Add a local compose file](#add-a-local-compose-file) below.
+
+```yaml
+services:
+  app:
+    volumes:
+      - ${HOME}/.config/git:/mnt/git-config:ro
+      - ${HOME}/.config/egress-filter:/mnt/egress-filter:ro
+```
+
 ## Host setup
 
 Two features read a directory from your host home directory, and **neither one declares the mount**.
@@ -98,12 +146,35 @@ services:
 only because nothing inside the container can write it. `egress-filter` warns when the mount is
 read-write, and `egress-status` says `global: NOT MOUNTED` when it is missing.
 
-### In a compose project, put the mount in the compose file
+Then add the proxy to the container environment, in the same `devcontainer.json`. This one is
+needed in a compose project as well, where the CLI renders it into its override file as
+`environment`:
 
-Not in `devcontainer.json`. The CLI renders every `devcontainer.json` mount into its compose
-override file as `<source>:<target>`, the short volume syntax, which has no place for `readonly`. A
-`:ro` entry of your own in `devcontainer.json` does not survive either: compose merges volumes by
-target path and the override file comes last, so the override wins.
+```jsonc
+"containerEnv": {
+  "HTTP_PROXY": "http://127.0.0.1:3128",
+  "HTTPS_PROXY": "http://127.0.0.1:3128",
+  "http_proxy": "http://127.0.0.1:3128",
+  "https_proxy": "http://127.0.0.1:3128",
+  "NO_PROXY": "localhost,127.0.0.1,::1,172.17.0.0/16",
+  "no_proxy": "localhost,127.0.0.1,::1,172.17.0.0/16"
+}
+```
+
+Without it, a process that VS Code starts, and any process started with `docker exec`, gets no proxy
+and every connection it makes is refused. A terminal is not affected, because a login shell reads
+the files the feature writes. The feature cannot add the block itself — a feature's `containerEnv`
+becomes a Dockerfile `ENV` placed before its own install step, and the proxy does not exist during
+the build.
+
+`172.17.0.0/16` is the docker default bridge. A compose project or a named network gets another
+subnet, and `egress-status` then says the block is out of date and prints the current one to paste.
+See [Processes started by `docker exec`](src/egress-filter/README.md#processes-started-by-docker-exec).
+
+**In a compose project, put the mount in the compose file** Not in `devcontainer.json`. The CLI renders every
+`devcontainer.json` mount into its compose override file as `<source>:<target>`, the short volume syntax, which has no
+place for `readonly`. A `:ro` entry of your own in `devcontainer.json` does not survive either: compose merges volumes
+by target path and the override file comes last, so the override wins.
 
 ### tidewave
 
@@ -154,7 +225,7 @@ everywhere. The standalone `devcontainer` CLI reads the config and nothing else,
     "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {},
     "ghcr.io/nshafer/devcontainer-features/git-config:2": {},
     "ghcr.io/nshafer/devcontainer-features/sandbox:2": {},
-    "ghcr.io/nshafer/devcontainer-features/egress-filter:2": {},
+    "ghcr.io/nshafer/devcontainer-features/egress-filter:2": { "presets": "debian,github,claude" },
     "ghcr.io/nshafer/devcontainer-features/claude:1": {},
     "ghcr.io/nshafer/devcontainer-features/tidewave:1": {}
   },
@@ -232,31 +303,6 @@ needs no entry, because `devc` writes a `.gitignore` of `*` inside it.
 `.devcontainer/devcontainer.local.json` holds only what you change. Comments and trailing commas
 are allowed, as in any `devcontainer.json`:
 
-```jsonc
-{
-  "features": {
-    "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {},
-    "ghcr.io/nshafer/devcontainer-features/git-config:2": {},
-    "ghcr.io/nshafer/devcontainer-features/sandbox:2": {},
-    "ghcr.io/nshafer/devcontainer-features/egress-filter:2": {},
-    "ghcr.io/nshafer/devcontainer-features/claude:1": {},
-    "ghcr.io/nshafer/devcontainer-features/tidewave:1": {}
-  },
-
-  // git-config and egress-filter read a mount that you declare and they do not. See Host setup
-  // above. In a compose project, drop these two lines and put the mounts in a local compose
-  // file instead. See "Add a local compose file" below.
-  "mounts": [
-    "type=bind,src=${localEnv:HOME}/.config/git,dst=/mnt/git-config,readonly",
-    "type=bind,src=${localEnv:HOME}/.config/egress-filter,dst=/mnt/egress-filter,readonly"
-  ],
-
-  "customizations": {
-    "vscode": { "extensions+": ["anthropic.claude-code"] }
-  }
-}
-```
-
 The merge follows five rules:
 
 | Written in the override file | Result in the generated config |
@@ -307,15 +353,6 @@ it.
 
 Then write the local compose file beside the two configs. The service name has to match the
 `service` in the config, and every other key merges into the committed service:
-
-```yaml
-# .devcontainer/docker-compose.local.yml -- gitignored
-services:
-  app:
-    volumes:
-      - ${HOME}/.config/git:/mnt/git-config:ro
-      - ${HOME}/.config/egress-filter:/mnt/egress-filter:ro
-```
 
 Three things to know:
 
@@ -488,12 +525,20 @@ as on a machine, for the same reason. It carries one option:
 `"moby": false`. The base image is on Debian trixie, which has no `moby-cli` package, and the
 feature stops the build rather than falling back to Docker CE on its own.
 
-**dockerd has to be told about the proxy.** `egress-filter` writes `HTTP_PROXY` to
-`/etc/environment`, which dockerd never reads: it is started by the docker-in-docker entrypoint,
-from the container environment. Without the three variables in `containerEnv`, the firewall rejects
-every image pull the harness makes, and the failure reads as a registry timeout. Drop them if you
-drop `egress-filter`. Hostnames are configured in two places — the presets on the feature, and
+**dockerd reads the proxy from `/etc/docker/daemon.json`.** It never reads the `/etc/environment`
+that `egress-filter` writes, because the docker-in-docker entrypoint starts it from the container
+environment. `egress-filter` 2.1 writes that file itself, so nothing is needed here for dockerd.
+Before it did, every image pull the harness made was rejected and the failure read as a registry
+timeout. Hostnames are configured in two places — the presets on the feature, and
 `.devcontainer/egress-allow.txt` for the rest. A container restart applies an edit to that file.
+
+**The `containerEnv` block is for everything else.** `/etc/environment` and `/etc/profile.d/` reach
+a login shell and the VS Code environment probe, and nothing else. A process started by a plain
+`docker exec` — which is how some VS Code extensions start theirs — inherits only what Docker
+stored when the container was created, so without that block it gets no proxy and every request it
+makes is refused. A feature cannot supply it: the CLI emits a feature's `containerEnv` as a
+Dockerfile `ENV` before that feature's install step, and the proxy does not exist during the build.
+See [Processes started by `docker exec`](src/egress-filter/README.md#processes-started-by-docker-exec).
 
 **`docker-in-docker` is pinned to `:4` for the iptables backend.** Version 2 moves Debian to the
 legacy iptables backend with no check at all, and that backend needs `ip_tables` kernel modules. The

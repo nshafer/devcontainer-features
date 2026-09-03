@@ -72,5 +72,41 @@
     "features": {
       "egress-filter": {}
     }
+  },
+  "container-env": {
+    "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+    "remoteUser": "root",
+    "containerEnv": {
+      "HTTP_PROXY": "http://127.0.0.1:3128",
+      "HTTPS_PROXY": "http://127.0.0.1:3128",
+      "http_proxy": "http://127.0.0.1:3128",
+      "https_proxy": "http://127.0.0.1:3128",
+      "NO_PROXY": "localhost,127.0.0.1,::1",
+      "no_proxy": "localhost,127.0.0.1,::1"
+    },
+    "features": {
+      "egress-filter": {
+        "allow": "example.com",
+        "localNetworks": "off"
+      }
+    }
+  },
+  "container-env-stale": {
+    "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+    "remoteUser": "root",
+    "containerEnv": {
+      "HTTP_PROXY": "http://127.0.0.1:3128",
+      "HTTPS_PROXY": "http://127.0.0.1:3128",
+      "http_proxy": "http://127.0.0.1:3128",
+      "https_proxy": "http://127.0.0.1:3128",
+      "NO_PROXY": "localhost,127.0.0.1,::1",
+      "no_proxy": "localhost,127.0.0.1,::1"
+    },
+    "features": {
+      "egress-filter": {
+        "allow": "example.com",
+        "localNetworks": "auto"
+      }
+    }
   }
 }
