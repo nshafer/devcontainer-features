@@ -64,10 +64,10 @@ check "the state file records it for an unprivileged reader" bash -c '
 
 # upstreamProxy defaults to auto, which reads HTTP_PROXY from PID 1 -- now our own address. A proxy
 # whose upstream is itself answers nothing and says nothing about why, so `auto` finds nothing to
-# chain to and says so by writing no Upstream line. That is also the cost of the block: a dev
+# chain to and says so by writing no cache_peer line. That is also the cost of the block: a dev
 # container inside a dev container has to name its upstreamProxy, because this is the variable the
 # outer address would have arrived in.
 check "the proxy does not chain to itself" bash -c '
-    ! grep -q "^Upstream" /etc/devcontainer/egress-filter/tinyproxy.conf'
+    ! grep -q "^cache_peer" /etc/devcontainer/egress-filter/squid.conf'
 
 reportResults

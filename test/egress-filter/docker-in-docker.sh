@@ -36,8 +36,8 @@ check "the daemon can pull through the proxy" bash -c '
         echo "$out" | tail -3 | sed "s/^/  /"
         echo "  container env HTTP_PROXY: $(tr "\0" "\n" < /proc/1/environ |
             sed -n "s/^HTTP_PROXY=//p" | head -1)"
-        echo "  Upstream line: $(sed -n "s/^Upstream http //p" \
-            /etc/devcontainer/egress-filter/tinyproxy.conf | head -1)"
+        echo "  cache_peer line: $(grep "^cache_peer " \
+            /etc/devcontainer/egress-filter/squid.conf | head -1)"
         tail -5 /var/log/devcontainer/egress-filter-proxy.log 2>/dev/null | sed "s/^/  /"
         echo "the pull failed"; exit 1; }
     echo "  alpine:latest pulled"'
@@ -89,20 +89,20 @@ check "a container that uses the proxy is still held to the list" bash -c '
 # container that may itself be filtered, so the request crosses two allowlists.
 #
 # The host is a debian mirror rather than something only this scenario allows. A host on the inner
-# list alone comes back "403 Filtered" from the *outer* proxy, which reads exactly like the filter
+# list alone comes back "403 Forbidden" from the *outer* proxy, which reads exactly like the filter
 # working when it is the test that is wrong. This one is on both, which is why the scenario carries
 # the debian preset.
 #
 # The URL is plain http and not https, and that is about busybox. Alpine's wget cannot do TLS
 # through a proxy, so for an https URL it sends `GET https://host/...` instead of a CONNECT. A proxy
-# answers that on its own, but forwarding it upstream turns the host into "host:80https", which
-# nothing matches. Measured: plain http and a real CONNECT both cross the chain and return 200, and
-# that shape alone returns 403. Any ordinary client is fine -- see the note in the README.
+# answers that on its own, but a parent proxy does not have to fetch an absolute https URL and
+# refuses it. Measured: plain http and a real CONNECT both cross the chain and return 200, and that
+# shape alone returns 403. Any ordinary client is fine -- see the note in the README.
 check "a container can reach an allowed host through the proxy" bash -c '
     out=$(timeout 60 docker run --rm alpine:latest \
         wget -q -O- -T 20 http://deb.debian.org/debian/ 2>&1 || true)
     echo "  ${out:-<nothing>}" | head -2
-    echo "$out" | grep -q "403 Filtered" && { echo "the proxy filtered an allowed host"; exit 1; }
+    echo "$out" | grep -qi "403 " && { echo "the proxy filtered an allowed host"; exit 1; }
     echo "$out" | grep -qi "dists\|pool" || { echo "no page came back"; exit 1; }
     echo "  the mirror answered, so the request reached it"'
 
@@ -144,15 +144,15 @@ check "egress-status reports the inner daemon" bash -c '
 # out of its own. Chaining to the outer proxy gives it one.
 #
 # Written to hold in both places this suite runs. On a plain CI runner there is no outer proxy, no
-# HTTP_PROXY reaches PID 1, and the correct answer is no Upstream line at all.
+# HTTP_PROXY reaches PID 1, and the correct answer is no cache_peer line at all.
 check "the proxy chains to an outer proxy when the container was given one" bash -c '
     want=$(tr "\0" "\n" < /proc/1/environ | sed -n "s/^HTTP_PROXY=//p" | head -1)
-    have=$(sed -n "s/^Upstream http //p" /etc/devcontainer/egress-filter/tinyproxy.conf | head -1)
+    have=$(sed -n "s/^cache_peer \\([^ ]*\\) parent \\([0-9]*\\) .*/\\1:\\2/p" /etc/devcontainer/egress-filter/squid.conf | head -1)
     echo "  container env: ${want:-none}"
     echo "  upstream line: ${have:-none}"
     if [ -z "$want" ]; then
         [ -z "$have" ] || { echo "an upstream appeared with nothing to read it from"; exit 1; }
-        echo "  no outer proxy, and no Upstream line"
+        echo "  no outer proxy, and no cache_peer line"
         exit 0
     fi
     exp=${want#*://}; exp=${exp%%/*}

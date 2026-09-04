@@ -15,9 +15,13 @@ if [ ! -r "$LOG" ]; then
     exit 1
 fi
 
-# tinyproxy writes: Proxying refused on filtered domain "example.com"
-denied=$(grep -oE 'refused on filtered domain "[^"]+"' "$LOG" 2>/dev/null \
-         | sed 's/.*"\(.*\)"/\1/' | sort | uniq -c | sort -rn)
+# squid writes one line per request, and the feature's logformat puts the URL last:
+#   04/Sep/2026:11:22:33 +0000 127.0.0.1 TCP_DENIED/403 3966 HIER_NONE/- CONNECT example.com:443
+# A CONNECT names host:port and a GET names a full URL, so both get trimmed back to the host.
+denied=$(grep -E ' [A-Z_]+/403 ' "$LOG" 2>/dev/null \
+         | awk '{ print $NF }' \
+         | sed -e 's|^[a-zA-Z][a-zA-Z0-9+.-]*://||' -e 's|/.*||' -e 's|:[0-9]*$||' \
+         | grep -v '^$' | sort | uniq -c | sort -rn)
 
 if [ -z "$denied" ]; then
     echo "egress-denied: nothing has been refused since this container started."

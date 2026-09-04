@@ -13,7 +13,7 @@ The error is almost always a bare 403 from the proxy, and most tools describe it
 | `curl` (https) | `curl: (56) CONNECT tunnel failed, response 403` |
 | `curl` (http) | an HTML page titled *Blocked by egress-filter* |
 | `git` | `fatal: unable to access '...': CONNECT tunnel failed, response 403` |
-| `npm` | `npm error 403 ... Filtered`, followed by advice about forbidden package versions |
+| `npm` | `npm error 403 Forbidden`, followed by advice about forbidden package versions |
 | `dig @8.8.8.8`, `nslookup ... 1.1.1.1` | a timeout, or `connection refused` |
 
 DNS is its own case. Names still resolve, but only through the resolvers in `/etc/resolv.conf`:

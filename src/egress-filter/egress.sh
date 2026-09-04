@@ -14,8 +14,8 @@
 # the traffic would mean handing every TLS session to a certificate this feature generated.
 #
 # The two halves come apart cleanly, which is the nicest property here: changing the allowlist is a
-# proxy reload (SIGHUP), never a firewall change. So lists can be edited live, by an unprivileged
-# user, without anything being briefly open.
+# proxy reload, never a firewall change. So lists can be edited live, by an unprivileged user, and
+# nothing is ever briefly open -- the proxy is briefly closed instead. See reload_proxy.
 #
 # An inner Docker daemon needs a second copy of both halves, for reasons the OUTPUT chain cannot
 # reach. See the docker section below.
@@ -56,7 +56,7 @@ DNS_SERVERS="${EGRESS_DNS_SERVERS:-$DNS_SERVERS}"
 LOCAL_NETWORKS="${EGRESS_LOCAL_NETWORKS:-$LOCAL_NETWORKS}"
 UPSTREAM_PROXY="${EGRESS_UPSTREAM_PROXY:-$UPSTREAM_PROXY}"
 FILTER_FILE=/etc/devcontainer/egress-filter/allow.regex
-PROXY_CONF=/etc/devcontainer/egress-filter/tinyproxy.conf
+PROXY_CONF=/etc/devcontainer/egress-filter/squid.conf
 SOURCES_FILE=/etc/devcontainer/egress-filter/sources.txt
 # Every source, concatenated in merge order with a header before each one. allow.regex is what the
 # proxy reads and is unreadable at a glance -- anchored, escaped regex, sorted, with no indication
@@ -66,12 +66,20 @@ ALLOWLIST_FILE=/etc/devcontainer/egress-filter/allowlist.txt
 # Readable by anyone, because the status command has to work for the remote user and
 # querying iptables needs root -- see firewall_state().
 STATE_FILE=/run/devcontainer/egress-filter.state
-# The proxy's own log, separate from the feature's. It has to be a different file and it has to
-# be pre-created: tinyproxy drops to $PROXY_USER before opening it, so a root-owned file is
-# silently not written and every denial is lost -- which is exactly the record you need to build
-# an allowlist from. World-readable on purpose, so the person building the list can read it
-# without root.
+# The proxy's own access log, separate from the feature's. It has to be a different file and it has
+# to be pre-created: squid drops to $PROXY_USER before opening it, so a root-owned file is silently
+# not written and every denial is lost -- which is exactly the record you need to build an allowlist
+# from. World-readable on purpose, so the person building the list can read it without root.
 PROXY_LOG=/var/log/devcontainer/egress-filter-proxy.log
+# squid's own diagnostics, and deliberately not the same file. egress-denied reads PROXY_LOG a line
+# at a time and every line there is a request; a startup error in the middle of it is not.
+PROXY_CACHE_LOG=/var/log/devcontainer/egress-filter-squid.log
+# Named rather than left to the default, because `squid -k reconfigure` finds the running proxy
+# through this file and the default one lives in a directory the distro package owns.
+PROXY_PID=/run/devcontainer/egress-filter-squid.pid
+# The 403 page an agent reads. squid takes a directory of templates and not one file, so install.sh
+# copies the distro's set here and writes ours over the name squid uses for a denied request.
+ERROR_DIR="$SHARE_DIR/errors"
 
 # Both sit under a per-project directory rather than loose in /run and /var/log, so neither can
 # collide with a distro package of the same name. Created here because any subcommand may be the
@@ -300,9 +308,9 @@ build_list() {
 # own address back and chain us to ourselves.
 # http://host:port/ -> host:port, and nothing at all for our own address.
 #
-# tinyproxy takes a bare address, and a scheme or a trailing slash on the Upstream line stops it
-# starting. The two callers below both want the same shape: the upstream to chain to, and the
-# address the firewall has to keep everyone else away from.
+# squid wants the host and the port as two words on the cache_peer line, so a scheme and a path
+# have to come off first. The two callers below both want the same shape: the upstream to chain to,
+# and the address the firewall has to keep everyone else away from.
 proxy_host_port() {
     local raw="${1:-}" host_port
     [ -n "$raw" ] || return 0
@@ -342,87 +350,192 @@ foreign_proxies() {
 }
 
 write_proxy_conf() {
-    install -d "$(dirname "$PROXY_CONF")"
-    # Created before tinyproxy starts, owned by the user it drops to, readable by everyone.
-    touch "$PROXY_LOG" 2>/dev/null
-    chown "$PROXY_USER:" "$PROXY_LOG" 2>/dev/null
-    chmod 0644 "$PROXY_LOG" 2>/dev/null
+    install -d "$(dirname "$PROXY_CONF")" "$(dirname "$PROXY_PID")"
+    # Created before squid starts, owned by the user it drops to, readable by everyone. squid opens
+    # both logs after it has dropped privileges, so a root-owned file here is a log that never gets
+    # written and a denial record that is lost.
+    local f
+    for f in "$PROXY_LOG" "$PROXY_CACHE_LOG"; do
+        touch "$f" 2>/dev/null
+        chown "$PROXY_USER:" "$f" 2>/dev/null
+        chmod 0644 "$f" 2>/dev/null
+    done
+    local group
+    group="$(id -gn "$PROXY_USER" 2>/dev/null)" || group="$PROXY_USER"
+    : "${group:=$PROXY_USER}"
+
     # Every address, and only when there is an inner daemon to need it.
     #
-    # tinyproxy binds at start, and the bridges dockerd makes do not exist yet -- dockerd starts
+    # squid binds at start, and the bridges dockerd makes do not exist yet -- dockerd starts
     # after this. Naming addresses here would mean a proxy restart every time a `docker network
     # create` added one, so it binds all of them instead and the reachable set is decided elsewhere:
     # the private ranges below, and an INPUT rule that drops this port on the way in from the outer
     # network. See apply_input_guard. Loopback stays the only listener without an inner daemon.
-    local listen="Listen 127.0.0.1" extra_allow="" upstream="" up
+    local http_port="http_port 127.0.0.1:$PROXY_PORT"
+    local clients="acl proxy_clients src 127.0.0.1/32"
     if docker_present; then
-        listen="Listen 0.0.0.0"
-        extra_allow="Allow 10.0.0.0/8
-Allow 172.16.0.0/12
-Allow 192.168.0.0/16"
+        http_port="http_port $PROXY_PORT"
+        clients="$clients
+acl proxy_clients src 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
     fi
+
+    # The allowlist, and nothing at all when there is not one. squid refuses to start on an acl that
+    # names an empty file, so an empty list would take the filter down instead of denying
+    # everything -- the wrong way round for a default-deny filter.
+    local allow_rule="# every list was empty, so nothing is allowed"
+    if [ -s "$FILTER_FILE" ]; then
+        allow_rule="acl allowed_dst dstdom_regex -i \"$FILTER_FILE\"
+http_access allow allowed_dst"
+    fi
+
+    # Where this proxy sends what it cannot reach itself. never_direct hands everything to the peer,
+    # and always_direct takes the local subnets back out: a peer on the outer network holds no
+    # pattern for a container on ours and refuses it, and that 403 reads as this container's fault.
+    # A `dst` match and not a name match, so a compose service that resolves onto the local subnet
+    # goes direct as well.
+    local upstream="" up lnet direct=""
     up="$(upstream_proxy)"
     if [ -n "$up" ]; then
-        upstream="Upstream http $up"
-        # Local peers stay local. Without these, a request for a peer on the docker network goes up
-        # the chain like everything else, and the outer proxy refuses an address it has no pattern
-        # for -- the 403 then reads as this container's fault. The last matching rule wins in
-        # tinyproxy, so these come after the general line.
-        local lnet
+        upstream="cache_peer ${up%:*} parent ${up##*:} 0 no-query default no-digest no-netdb-exchange"
         while IFS= read -r lnet; do
-            [ -n "$lnet" ] && upstream="$upstream
-Upstream none \"$lnet\""
+            [ -n "$lnet" ] && direct="${direct}acl direct_dst dst $lnet
+"
         done <<< "$(local_networks 2>/dev/null)"
+        [ -n "$direct" ] && direct="${direct}always_direct allow direct_dst
+"
+        upstream="$upstream
+${direct}never_direct allow all"
     fi
+
+    # Only when it is there. squid treats a missing error_directory as fatal, and a proxy that will
+    # not start is a worse outcome than a stock 403 page.
+    local errors=""
+    [ -d "$ERROR_DIR" ] && errors="error_directory $ERROR_DIR"
+
     cat > "$PROXY_CONF" <<EOF
 # Generated by the egress-filter feature. Edits are overwritten.
-User $PROXY_USER
-Group $PROXY_USER
-Port $PROXY_PORT
-${listen}
-Timeout 600
-MaxClients 512
-Allow 127.0.0.1
-${extra_allow}
-${upstream}
-ConnectPort 443
-ConnectPort 80
-ErrorFile 403 "$SHARE_DIR/403.html"
-Filter "$FILTER_FILE"
-FilterDefaultDeny Yes
-FilterType ere
-FilterCaseSensitive No
-LogFile "$PROXY_LOG"
-LogLevel Connect
+visible_hostname egress-filter
+pid_filename $PROXY_PID
+cache_effective_user $PROXY_USER
+cache_effective_group $group
+$http_port
+
+# Who may talk to this proxy at all. The firewall decides who can reach the port; this decides who
+# it answers, and the two have to agree.
+$clients
+http_access deny !proxy_clients
+http_access deny manager
+
+# CONNECT opens a blind tunnel, so the ports it may open are worth naming. Everything else keeps
+# the ports a proxy has any business forwarding.
+acl CONNECT method CONNECT
+acl connect_ports port 443 80
+acl safe_ports port 80 443 1025-65535
+http_access deny CONNECT !connect_ports
+http_access deny !safe_ports
+
+# The allowlist. Rebuilt by build_list, re-read on \`squid -k reconfigure\`, and the last word.
+$allow_rule
+http_access deny all
+
+$upstream
+
+# A filtering proxy and nothing else: no disk cache, no stored objects, no rewriting.
+cache deny all
+coredump_dir /var/log/devcontainer
+shutdown_lifetime 3 seconds
+logfile_rotate 0
+forwarded_for delete
+httpd_suppress_version_string on
+
+# %ru is last on purpose: egress-denied takes the refused host off the end of a 403 line.
+logformat egress %tl %>a %Ss/%03>Hs %<st %Sh/%<a %rm %ru
+access_log $PROXY_LOG egress
+cache_log $PROXY_CACHE_LOG
+$errors
 EOF
     chmod 0644 "$PROXY_CONF"
+    # Squid 6 dropped visible_hostname. It is written anyway, because a squid that cannot work out
+    # its own name refuses to start on a host whose hostname does not resolve, and it comes back out
+    # when this build says it does not know the directive.
+    if squid -k parse -f "$PROXY_CONF" 2>&1 | grep -q visible_hostname; then
+        sed -i '/^visible_hostname /d' "$PROXY_CONF"
+    fi
 }
 
-proxy_pid() { pgrep -x tinyproxy 2>/dev/null | head -1; }
+# The pid file outlives a squid that was killed, so it is an answer only while that process is still
+# there. pgrep covers the moment before squid has written the file.
+proxy_pid() {
+    local pid
+    pid="$(cat "$PROXY_PID" 2>/dev/null)"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        echo "$pid"
+        return 0
+    fi
+    pgrep -x squid 2>/dev/null | head -1
+}
+
+# Whether the port is open, which is the question `up` has and a pid does not settle. squid forks a
+# worker and opens the listener a second or two later, and the firewall goes on straight after this
+# returns -- so waiting for the process is waiting for the wrong thing.
+#
+# Read from the kernel's own table rather than connected to. A connection would be a request, and
+# every poll below would leave a line in the log egress-denied reads.
+proxy_listening() {
+    local hexport f
+    hexport="$(printf '%04X' "$PROXY_PORT")"
+    for f in /proc/net/tcp /proc/net/tcp6; do
+        [ -r "$f" ] || continue
+        # Column 2 is the local address as hex, column 4 the state, and 0A is LISTEN.
+        awk -v p=":$hexport\$" '$2 ~ p && $4 == "0A" { found = 1 } END { exit !found }' "$f" &&
+            return 0
+    done
+    return 1
+}
 
 start_proxy() {
     if [ -n "$(proxy_pid)" ]; then
         reload_proxy
         return 0
     fi
-    tinyproxy -c "$PROXY_CONF" 2>/dev/null
+    squid -f "$PROXY_CONF" 2>/dev/null
     local i=0
-    while [ "$i" -lt 25 ]; do
-        [ -n "$(proxy_pid)" ] && { log "proxy listening on 127.0.0.1:$PROXY_PORT as $PROXY_USER"; return 0; }
+    while [ "$i" -lt 75 ]; do
+        proxy_listening && { log "proxy listening on 127.0.0.1:$PROXY_PORT as $PROXY_USER"; return 0; }
         i=$((i + 1)); sleep 0.2
     done
     warn "the proxy did not start, so egress is UNFILTERED. Config error, most likely:"
-    tail -5 "$PROXY_LOG" 2>/dev/null | sed 's/^/!!!   /' >&2
-    tinyproxy -c "$PROXY_CONF" -d 2>&1 | head -3 | sed 's/^/!!!   /' >&2 &
-    sleep 0.5; pkill -f "tinyproxy -c $PROXY_CONF -d" 2>/dev/null
+    squid -k parse -f "$PROXY_CONF" 2>&1 | head -5 | sed 's/^/!!!   /' >&2
+    tail -5 "$PROXY_CACHE_LOG" 2>/dev/null | sed 's/^/!!!   /' >&2
     return 1
 }
 
 # The whole point of splitting policy from enforcement: a list change is this, and nothing else.
+# squid re-reads the acl file on reconfigure, so the firewall is never touched and the network is
+# never briefly open.
+#
+# It is briefly *closed*, though, and that is the one place squid behaves differently from the proxy
+# this feature used before it: reconfigure closes the listening socket, opens it again, and drops
+# whatever was in flight. A request in that window is refused. Closed is the right way round for a
+# filter, and the window is a fraction of a second on a file a person edits by hand, so the cost is
+# one retry at worst.
+#
+# What is not acceptable is returning before it is over: the caller would hand the next command a
+# proxy that is not listening. So the port has to go down once and come back up before this returns.
 reload_proxy() {
-    local pid; pid="$(proxy_pid)"
-    [ -n "$pid" ] || return 1
-    kill -HUP "$pid" 2>/dev/null && log "proxy reloaded its allowlist"
+    [ -n "$(proxy_pid)" ] || return 1
+    squid -k reconfigure -f "$PROXY_CONF" 2>/dev/null || return 1
+    local i=0
+    # Missing the transition costs a second and answers correctly anyway, which is why this is
+    # bounded rather than retried.
+    while [ "$i" -lt 20 ] && proxy_listening; do i=$((i + 1)); sleep 0.05; done
+    i=0
+    while [ "$i" -lt 100 ]; do
+        proxy_listening && { log "proxy reloaded its allowlist"; return 0; }
+        i=$((i + 1)); sleep 0.05
+    done
+    warn "the proxy was reconfigured and did not start listening again"
+    return 1
 }
 
 # Which addresses port 53 may be opened to. One per line, IPv4 only.
@@ -1254,7 +1367,7 @@ status() {
     # Read from the generated config rather than resolved again, because this runs unprivileged and
     # /proc/1/environ needs root. The file is what the proxy is actually using either way.
     local up
-    up="$(sed -n 's/^Upstream http //p' "$PROXY_CONF" 2>/dev/null | head -1)"
+    up="$(sed -n 's/^cache_peer \([^ ]*\) parent \([0-9]*\) .*/\1:\2/p' "$PROXY_CONF" 2>/dev/null | head -1)"
     [ -n "$up" ] && printf '  %-14s via %s -- both allowlists apply\n' "upstream" "$up"
 
     # iptables cannot be queried without root, and this runs as the remote user, so asking it
@@ -1523,7 +1636,7 @@ check_global_mount() {
 }
 
 up() {
-    for tool in tinyproxy iptables; do
+    for tool in squid iptables; do
         command -v "$tool" >/dev/null 2>&1 || {
             warn "$tool is missing, so egress cannot be filtered. Leaving the network open rather"
             warn "  than half-closed -- a container that silently cannot reach anything is worse."

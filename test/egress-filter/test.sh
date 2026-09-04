@@ -15,7 +15,7 @@ direct() { timeout 10 curl -s -o /dev/null -w "%{http_code}" --noproxy "*" "http
 export -f fetch direct
 
 check "the tools and scripts landed" bash -c '
-    command -v tinyproxy >/dev/null || { echo "no tinyproxy"; exit 1; }
+    command -v squid     >/dev/null || { echo "no squid"; exit 1; }
     command -v iptables  >/dev/null || { echo "no iptables"; exit 1; }
     command -v egress-status >/dev/null
     # No command for widening the list from inside -- see the README.

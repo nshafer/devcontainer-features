@@ -69,7 +69,7 @@ echo "==> egress-filter: baseline=$BASELINE presets=${PRESETS:-none} dns=$ALLOW_
 # Installing the feature is what turns filtering on -- there is no enabled option, because not
 # wanting a default-deny network is expressed by not adding the feature.
 missing=""
-command -v tinyproxy >/dev/null 2>&1 || missing="$missing tinyproxy"
+command -v squid     >/dev/null 2>&1 || missing="$missing squid"
 command -v iptables  >/dev/null 2>&1 || missing="$missing iptables"
 
 if [ -n "$missing" ]; then
@@ -88,6 +88,11 @@ if [ -n "$missing" ]; then
     fi
 fi
 
+# The distro package ships a service and a config of its own, and a squid started by either one
+# holds the port this feature listens on. A dev container has no service manager to stop it with
+# later, so it is stopped here, once, while the build still owns the image.
+pkill -x squid 2>/dev/null || true
+
 # The uid is the enforcement boundary. Everything the agent runs is some other uid and lands on the
 # REJECT rule; only this one is allowed out, and it owns nothing else in the container. Created as a
 # system user with no login shell, so it is a network identity rather than an account.
@@ -105,8 +110,23 @@ install -m 0755 egress.sh "$SHARE_DIR/egress.sh"
 install -m 0755 entrypoint.sh "$SHARE_DIR/entrypoint.sh"
 install -m 0755 post-attach.sh "$SHARE_DIR/post-attach.sh"
 install -m 0644 baseline-allow.txt "$SHARE_DIR/baseline-allow.txt"
-install -m 0644 403.html "$SHARE_DIR/403.html"
 install -m 0644 BLOCKED.md "$SHARE_DIR/BLOCKED.md"
+
+# squid reads a *directory* of error templates rather than one file, and answers with a built-in
+# stub for every name it does not find there. So the distro's set is copied whole and ours is
+# written over ERR_ACCESS_DENIED, which is the page squid returns for a request the allowlist
+# refused. Where the distro ships no templates, ours is the only file and every other error keeps
+# the built-in page.
+install -d "$SHARE_DIR/errors"
+for d in /usr/share/squid/errors/en /usr/share/squid/errors/en-us \
+         /usr/share/squid/errors/templates /usr/share/squid-langpack/en; do
+    if [ -d "$d" ]; then
+        cp -aL "$d/." "$SHARE_DIR/errors/" 2>/dev/null || true
+        break
+    fi
+done
+install -m 0644 403.html "$SHARE_DIR/errors/ERR_ACCESS_DENIED"
+chmod -R a+rX "$SHARE_DIR/errors"
 install -d "$SHARE_DIR/presets"
 install -m 0644 presets/*.txt "$SHARE_DIR/presets/"
 

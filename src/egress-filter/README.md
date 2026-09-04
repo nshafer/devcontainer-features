@@ -175,8 +175,11 @@ Default-deny outbound networking, decided by hostname. Two halves work together:
 - **The proxy is the policy.** It filters on the hostname in the `CONNECT` request, so the lists are
   domains rather than addresses. **There is no TLS interception and no CA to install.**
 
-That split is what makes the lists pleasant. Changing one is a proxy reload (`SIGHUP`), never a
-firewall change, so nothing is briefly open while you edit.
+That split is what makes the lists pleasant. Changing one is a proxy reload, never a firewall
+change, so nothing is briefly open while you edit. The proxy is briefly *closed* instead: squid
+shuts its listening socket for a fraction of a second when it re-reads the list, and a request in
+that window is refused rather than allowed. One retry at worst, and the right way round for a
+filter.
 
 ### The allowlist
 
@@ -394,7 +397,7 @@ people to read the allowlist when the daemon was the problem.
 daemon, so the outer `DOCKER-USER` chain rejects it exactly like any other container. Every request
 in the inner container then fails, and the inner allowlist is not the reason.
 
-**`upstreamProxy` gives it one, and `auto` is the default.** The proxy takes a tinyproxy `Upstream`
+**`upstreamProxy` gives it one, and `auto` is the default.** The proxy takes a squid `cache_peer`
 line pointing at the outer proxy, so requests go inner proxy → outer proxy → the host:
 
 ```
@@ -405,9 +408,9 @@ egress-filter:
 ```
 
 **Peers on the local subnets do not take the chain.** The generated config carries an
-`Upstream none "172.18.0.0/16"` line for each subnet `localNetworks` opened, so a request for a peer
-by address goes to the peer. Without that line it would go up the chain like everything else, and
-the outer proxy would refuse an address it has no pattern for, with a 403 that reads as the inner
+`always_direct` rule over a `dst` match for each subnet `localNetworks` opened, so a request for a
+peer goes to the peer. Without that rule it would go up the chain like everything else, and the
+outer proxy would refuse an address it has no pattern for, with a 403 that reads as the inner
 list's fault.
 
 **Nothing is widened by this.** A host has to be on *both* lists to be reached. The inner proxy
@@ -446,11 +449,12 @@ the chain and narrowing it would close the route to this feature's own proxy.
 
 **One client shape does not survive the extra hop, and busybox is the one that sends it.** Alpine's
 `wget` cannot do TLS through a proxy, so for an `https://` URL it sends `GET https://host/...`
-instead of a `CONNECT`. A single proxy answers that on its own. Forwarding it upstream turns the
-host into `host:80https`, which matches no allowlist, and the outer proxy returns `403 Filtered` for
-a host that is on both lists. Measured on the chain: plain `http`, and any real `CONNECT`, both
-return 200. `curl`, `git`, `apt`, `npm` and the language toolchains all send `CONNECT`. Only reach
-for `apk add curl` when a busybox container has to fetch `https` from two containers deep.
+instead of a `CONNECT`. A single proxy answers that on its own. A chained pair does not: an absolute
+`https://` URL handed to a parent proxy is not a request a proxy has to fetch, and the outer one
+refuses it for a host that is on both lists. Measured on the chain: plain `http`, and any real
+`CONNECT`, both return 200. `curl`, `git`, `apt`, `npm` and the language toolchains all send
+`CONNECT`. Only reach for `apk add curl` when a busybox container has to fetch `https` from two
+containers deep.
 
 **Two things follow from this that are worth expecting.** A container you start is filtered by
 hostname exactly like this one, so an image that pulls from a host you have not allowed fails the
@@ -624,7 +628,10 @@ Hosts this container asked for and was refused:
 ```
 
 It only reads and needs no privileges. The feature pre-creates the proxy log owned by the proxy user
-and world-readable, so `egress-denied` can read every refusal.
+and world-readable, so `egress-denied` can read every refusal. That file holds one line per request
+and nothing else. The proxy's own diagnostics — what it said while starting, and why it refused to —
+go to `/var/log/devcontainer/egress-filter-squid.log`, which is the file to read when
+`egress-status` says the proxy is not running.
 
 ### The mount is yours
 
