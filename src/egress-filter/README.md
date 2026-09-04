@@ -27,6 +27,11 @@ Default-deny outbound networking, with a hostname allowlist merged from a global
 | upstreamProxy | Where this container's proxy sends what it cannot reach itself. A dev container inside a dev container needs this: the inner proxy is a container of the outer daemon, so the outer firewall rejects it like any other. 'auto' uses the HTTP_PROXY the runtime gave this container, and is a no-op when there is none. 'off' never chains. Anything else is a host:port. Both allowlists apply, the inner one first. | string | auto |
 | proxyPort | Port the filtering proxy listens on. Loopback only, unless an inner Docker daemon is installed - then it also answers on the container's own address, which is the only one a container it starts can reach. | string | 3128 |
 
+<!-- The docs generator pastes this file into README.md with JavaScript String.replace, so a
+dollar sign directly before a backtick, a single quote, an ampersand or a digit is a replacement
+pattern, not text. A dollar sign before a backtick repeats the whole top of the README. Keep such
+a dollar sign inside a fenced block, where a newline follows it. -->
+
 ## Host setup
 
 Two steps, and an optional third. Step 1 is once per machine, the others are once per project.
@@ -259,40 +264,17 @@ network" is the internet, and opening it would undo the filter. That case is a w
 request for `http://172.18.0.5:9000` to the proxy rather than straight to the peer. The allowlist is
 hostnames, so the proxy used to deny that, and `NO_PROXY` had to name every subnet to keep such a
 client off the proxy — a list that changed with every machine. Now `build_list` turns each subnet
-into an anchored address pattern, `^172\.18\.[0-9]{1,3}\.[0-9]{1,3}
-# Egress filter (nshafer) (egress-filter)
+into an anchored address pattern, and the request reaches the peer either way. For `172.18.0.0/16`
+the pattern is
 
-Default-deny outbound networking, with a hostname allowlist merged from a global list on the host, a per-project list in the repo, and a baseline that keeps VS Code working. Enforced by an in-container firewall, so an agent that ignores HTTP_PROXY simply cannot connect. Containers started by an inner Docker daemon are filtered too.
-
-## Example Usage
-
-```json
-"features": {
-    "#{Registry}/#{Namespace}/egress-filter:#{Version}": {}
-}
+```
+^172\.18\.[0-9]{1,3}\.[0-9]{1,3}$
 ```
 
-## Options
-
-| Options Id | Description | Type | Default Value |
-|-----|-----|-----|-----|
-| presets | Curated blocks of hostnames for common ecosystems, comma separated. Available: debian, ubuntu, alpine, npm, hex, go, python, rust, github, githubcopilot, gitlab, docker, claude. Saves maintaining forty hostnames by hand; an unknown name is a warning, not a silent no-op. | string | - |
-| allow | Extra hostnames to allow, comma separated, on top of the lists. A leading dot means the domain and its subdomains: '.github.com,pypi.org'. | string | - |
-| deny | Hostnames to remove from the merged allowlist, comma separated. Applied last, so it overrides the global, project and baseline lists. | string | - |
-| baseline | Include the built-in baseline that keeps VS Code itself working - the marketplace, extension CDNs and update hosts. Without it the server cannot install extensions, and attaching may hang. | boolean | true |
-| projectAllowlist | Where the per-project list lives inside the container. A glob, because a feature's entrypoint is not told the workspace folder. Read once at container start and never re-read - it lives in the repo, where the container's own user can write it. See the README. | string | /workspaces/*/.devcontainer/egress-allow.txt |
-| allowDns | Let the container resolve names directly, against the resolvers in dnsServers only - port 53 to any other host is refused by the firewall. Turning this off closes the remaining slow exfiltration channel but breaks anything that resolves for itself - git, package managers, most clients. See the README. | boolean | true |
-| dnsServers | IPv4 addresses or CIDRs that port 53 may be opened to, comma separated. Empty means the nameservers the container runtime put in /etc/resolv.conf, which is what would have been used anyway. Only consulted when allowDns is on. | string | - |
-| localNetworks | Subnets that may be reached directly, and through the proxy by address - the other containers of a docker-compose project, on 5432 and the like. 'auto' means the subnets this container is attached to, taken from its own routing table and accepted only when they are private. 'off' blocks them. Anything else is a comma separated list of IPv4 CIDRs, which is how you narrow it to one peer. See the README. | string | auto |
-| noProxy | Extra entries for NO_PROXY, comma separated. The proxy forwards to localNetworks by address, but a name is not an address: a client that reads HTTP_PROXY sends 'http://db:8080' to the proxy, which denies it. Name such services here: 'db,redis,minio'. Repeat them in the containerEnv block in your devcontainer.json -- see the README. | string | - |
-| upstreamProxy | Where this container's proxy sends what it cannot reach itself. A dev container inside a dev container needs this: the inner proxy is a container of the outer daemon, so the outer firewall rejects it like any other. 'auto' uses the HTTP_PROXY the runtime gave this container, and is a no-op when there is none. 'off' never chains. Anything else is a host:port. Both allowlists apply, the inner one first. | string | auto |
-| proxyPort | Port the filtering proxy listens on. Loopback only, unless an inner Docker daemon is installed - then it also answers on the container's own address, which is the only one a container it starts can reach. | string | 3128 |
-#{Customizations}
-, and the request reaches the
-peer either way. Nothing is widened: every process here could already reach the peer directly. What
-it buys is a `NO_PROXY` with no subnet in it, which is what lets the `containerEnv` block in step 3
-be the same everywhere. `egress-status` lists the subnets under `local`, and the allowlist file
-shows the pattern each one became.
+Nothing is widened: every process here could already reach the peer directly. What it buys is a
+`NO_PROXY` with no subnet in it, which is what lets the `containerEnv` block in step 3 be the same
+everywhere. `egress-status` lists the subnets under `local`, and the allowlist file shows the
+pattern each one became.
 
 **Name the services in `noProxy` if you talk HTTP to them.** A name is not an address, so no pattern
 covers `http://db:8080`, and the proxy denies it. The feature cannot know what compose called the

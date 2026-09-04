@@ -1,3 +1,8 @@
+<!-- The docs generator pastes this file into README.md with JavaScript String.replace, so a
+dollar sign directly before a backtick, a single quote, an ampersand or a digit is a replacement
+pattern, not text. A dollar sign before a backtick repeats the whole top of the README. Keep such
+a dollar sign inside a fenced block, where a newline follows it. -->
+
 ## Host setup
 
 Two steps, and an optional third. Step 1 is once per machine, the others are once per project.
@@ -230,11 +235,17 @@ network" is the internet, and opening it would undo the filter. That case is a w
 request for `http://172.18.0.5:9000` to the proxy rather than straight to the peer. The allowlist is
 hostnames, so the proxy used to deny that, and `NO_PROXY` had to name every subnet to keep such a
 client off the proxy — a list that changed with every machine. Now `build_list` turns each subnet
-into an anchored address pattern, `^172\.18\.[0-9]{1,3}\.[0-9]{1,3}$`, and the request reaches the
-peer either way. Nothing is widened: every process here could already reach the peer directly. What
-it buys is a `NO_PROXY` with no subnet in it, which is what lets the `containerEnv` block in step 3
-be the same everywhere. `egress-status` lists the subnets under `local`, and the allowlist file
-shows the pattern each one became.
+into an anchored address pattern, and the request reaches the peer either way. For `172.18.0.0/16`
+the pattern is
+
+```
+^172\.18\.[0-9]{1,3}\.[0-9]{1,3}$
+```
+
+Nothing is widened: every process here could already reach the peer directly. What it buys is a
+`NO_PROXY` with no subnet in it, which is what lets the `containerEnv` block in step 3 be the same
+everywhere. `egress-status` lists the subnets under `local`, and the allowlist file shows the
+pattern each one became.
 
 **Name the services in `noProxy` if you talk HTTP to them.** A name is not an address, so no pattern
 covers `http://db:8080`, and the proxy denies it. The feature cannot know what compose called the
