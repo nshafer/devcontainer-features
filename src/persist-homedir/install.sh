@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Two mounts do the work, both declared in devcontainer-feature.json:
+# Two named volumes do the work, both declared in devcontainer-feature.json:
 #
-#   <workspace>-homedir  -> /home                    named volume, survives rebuilds
-#   (anonymous volume)   -> /var/local/vscode-server  new every time the container is created
+#   <workspace>-persistent-homedir  -> /home                    survives a rebuild
+#   <workspace>-vscode-server       -> /var/local/vscode-server  survives a rebuild, prune separately
 #
 # /home rather than /home/<user> is deliberate. A feature's mount targets are static strings and
 # cannot be told the remote user's name, and the username differs per project (node, vscode, ...).
@@ -10,9 +10,10 @@
 # user's home is copied in on first use and preserved from then on.
 #
 # This script's job is the second mount: VS Code always installs its server to $HOME/.vscode-server
-# with no way to redirect it, so $HOME/.vscode-server is made a symlink into the anonymous volume.
-# That keeps a ~1GB server + extension tree off the persisted volume and gets it rebuilt with the
-# container, which is the point of excluding it.
+# with no way to redirect it, so $HOME/.vscode-server is made a symlink into the named volume. Kept
+# separate from /home so a ~1GB server + extension tree does not bloat the homedir volume, and so it
+# can be pruned on its own (`docker volume rm <workspace>-vscode-server`) without touching anything
+# else, instead of growing forever inside /home.
 set -euo pipefail
 
 SERVER_DIR=/var/local/vscode-server
