@@ -1,7 +1,7 @@
 
 # Egress filter (nshafer) (egress-filter)
 
-Default-deny outbound networking, with a hostname allowlist merged from a global list on the host, a per-project list in the repo, and a baseline that keeps VS Code working. Enforced by an in-container firewall, so an agent that ignores HTTP_PROXY simply cannot connect. Containers started by an inner Docker daemon are filtered too.
+Blocks all outbound network traffic from the container, except to the hosts on an allowlist. A firewall in the container is the control, so a program that ignores HTTP_PROXY cannot connect either. A proxy is the policy, so the lists hold host names and there is no TLS interception. The allowlist merges a global list on your host, a list in the repository, the options here, and a baseline that keeps VS Code working. Containers that an inner Docker daemon starts are filtered too.
 
 ## Example Usage
 
@@ -15,54 +15,75 @@ Default-deny outbound networking, with a hostname allowlist merged from a global
 
 | Options Id | Description | Type | Default Value |
 |-----|-----|-----|-----|
-| presets | Curated blocks of hostnames for common ecosystems, comma separated. Available: debian, ubuntu, alpine, npm, hex, go, python, rust, github, githubcopilot, gitlab, docker, claude. Saves maintaining forty hostnames by hand; an unknown name is a warning, not a silent no-op. | string | - |
-| allow | Extra hostnames to allow, comma separated, on top of the lists. A leading dot means the domain and its subdomains: '.github.com,pypi.org'. | string | - |
-| deny | Hostnames to remove from the merged allowlist, comma separated. Applied last, so it overrides the global, project and baseline lists. | string | - |
-| baseline | Include the built-in baseline that keeps VS Code itself working - the marketplace, extension CDNs and update hosts. Without it the server cannot install extensions, and attaching may hang. | boolean | true |
-| projectAllowlist | Where the per-project list lives inside the container. A glob, because a feature's entrypoint is not told the workspace folder. Read once at container start and never re-read - it lives in the repo, where the container's own user can write it. See the README. | string | /workspaces/*/.devcontainer/egress-allow.txt |
-| allowDns | Let the container resolve names directly, against the resolvers in dnsServers only - port 53 to any other host is refused by the firewall. Turning this off closes the remaining slow exfiltration channel but breaks anything that resolves for itself - git, package managers, most clients. See the README. | boolean | true |
-| dnsServers | IPv4 addresses or CIDRs that port 53 may be opened to, comma separated. Empty means the nameservers the container runtime put in /etc/resolv.conf, which is what would have been used anyway. Only consulted when allowDns is on. | string | - |
-| localNetworks | Subnets that may be reached directly, and through the proxy by address - the other containers of a docker-compose project, on 5432 and the like. 'auto' means the subnets this container is attached to, taken from its own routing table and accepted only when they are private. 'off' blocks them. Anything else is a comma separated list of IPv4 CIDRs, which is how you narrow it to one peer. See the README. | string | auto |
-| noProxy | Extra entries for NO_PROXY, comma separated. The proxy forwards to localNetworks by address, but a name is not an address: a client that reads HTTP_PROXY sends 'http://db:8080' to the proxy, which denies it. Name such services here: 'db,redis,minio'. Repeat them in the containerEnv block in your devcontainer.json -- see the README. | string | - |
-| upstreamProxy | Where this container's proxy sends what it cannot reach itself. A dev container inside a dev container needs this: the inner proxy is a container of the outer daemon, so the outer firewall rejects it like any other. 'auto' uses the HTTP_PROXY the runtime gave this container, and is a no-op when there is none. 'off' never chains. Anything else is a host:port. Both allowlists apply, the inner one first. | string | auto |
-| proxyPort | Port the filtering proxy listens on. Loopback only, unless an inner Docker daemon is installed - then it also answers on the container's own address, which is the only one a container it starts can reach. | string | 3128 |
+| presets | Built-in host lists to allow, comma separated. Available: debian, ubuntu, alpine, npm, hex, go, python, rust, github, githubcopilot, gitlab, docker, claude. An unknown name gives a warning that lists the valid names. | string | - |
+| allow | More hosts to allow, comma separated. A leading dot also allows the subdomains: '.github.com,pypi.org'. | string | - |
+| deny | Hosts to remove from the merged allowlist, comma separated. Applied last, so it overrides the global list, the project list, the presets and the baseline. | string | - |
+| baseline | Allow the hosts that VS Code itself needs: the marketplace, the extension CDNs and the update hosts. Without them, the server cannot install extensions, and the attach can hang. | boolean | true |
+| projectAllowlist | Where the project list is in the container. A glob, because the entrypoint of a feature is not told the workspace folder. Read one time at container start, because the remote user can write the repository. Read the README. | string | /workspaces/*/.devcontainer/egress-allow.txt |
+| allowDns | Let the container resolve names itself, against the servers in dnsServers only. The firewall refuses port 53 to any other address. Turn it off to close the last slow way out, at the cost of everything that resolves names for itself: git, package managers and most clients. | boolean | true |
+| dnsServers | The IPv4 addresses or CIDRs that port 53 can go to, comma separated. Empty means the servers that the container runtime put in /etc/resolv.conf. Used only when allowDns is on. | string | - |
+| localNetworks | The subnets that the container can reach directly, and through the proxy by address, such as the other containers of a Docker Compose project. 'auto' means the subnets that this container is attached to, from its own routing table, and only when they are private. 'off' blocks them. Anything else is a comma separated list of IPv4 CIDRs, which is how you narrow it to one peer. Read the README. | string | auto |
+| noProxy | More entries for NO_PROXY, comma separated. The proxy reaches the local subnets by address, but a name is not an address: a client that reads HTTP_PROXY sends 'http://db:8080' to the proxy, which denies it. Name such services here: 'db,redis,minio'. Repeat the names in the containerEnv block in your devcontainer.json. Read the README. | string | - |
+| upstreamProxy | Where the proxy sends what it cannot reach itself. A dev container inside a dev container needs this, because the inner proxy is a container of the outer daemon, and the outer firewall rejects it. 'auto' uses the HTTP_PROXY that the runtime gave this container, and does nothing when there is none. 'off' never chains. Anything else is a host:port. Both allowlists apply, the inner one first. | string | auto |
+| proxyPort | The port that the filtering proxy listens on. Loopback only, unless an inner Docker daemon is installed. Then it also answers on the address of the container, which is the only one that a started container can reach. | string | 3128 |
 
-<!-- The docs generator pastes this file into README.md with JavaScript String.replace, so a
-dollar sign directly before a backtick, a single quote, an ampersand or a digit is a replacement
-pattern, not text. A dollar sign before a backtick repeats the whole top of the README. Keep such
-a dollar sign inside a fenced block, where a newline follows it. -->
+## What it does
 
-## Host setup
+The container can reach the hosts that you allow. Every other outbound connection fails. Two parts
+work together:
 
-Two steps, and an optional third. Step 1 is once per machine, the others are once per project.
+- **A firewall is the control.** `iptables` rejects all outbound traffic, except loopback,
+  established connections, DNS, and traffic from one user: the proxy. No program that the agent
+  runs has that user ID, so no traffic leaves the container except through the proxy. The feature
+  sets `HTTP_PROXY` as a convenience. A tool that ignores it gets a rejected connection, not a way
+  around the filter.
+- **A proxy is the policy.** The proxy reads the host name in each request and compares it with the
+  allowlist. So your lists hold host names, not IP addresses. **The proxy does not read your HTTPS
+  traffic, and you do not install a certificate.**
 
-### 1. Create the directory on the host
+A change to a list is a proxy reload. The firewall does not change, so nothing is open while you
+edit. The proxy is closed for a fraction of a second during the reload, and a request in that
+moment is refused. That is the right direction for a filter.
+
+> **Note:** Use this feature together with [`sandbox`](../sandbox). A remote user with `sudo` runs
+> `iptables -F` and the whole filter is gone.
+
+## Install
+
+### 1. Make the folder on the host
+
+Do this one time on each machine:
 
 ```bash
 mkdir -p ~/.config/egress-filter
 touch ~/.config/egress-filter/allowlist.txt
 ```
 
-The directory is the mount source, so only the directory has to exist. The `allowlist.txt` file is
-the global list. It is optional, and an empty one is fine, but create it now so you have a place to
-add hosts later.
+The folder is the mount source, so only the folder must exist. `allowlist.txt` is your global list.
+An empty file is fine. Make it now, so that you have a place to add hosts later.
 
-### 2. Add the mount to your own config
+### 2. Add the features and a mount to your project
 
-This feature reads `/mnt/egress-filter` and does not mount anything there. You declare the mount,
-and **it has to be read-only**: the live re-read of the global list is safe only because nothing in
-the container can write it. [The mount is yours](#the-mount-is-yours) says why the feature cannot
-declare it for you.
+The feature reads the folder at `/mnt/egress-filter` in the container. You add the mount that puts
+it there, and **the mount must be read-only**. The feature re-reads the global list while the
+container runs, which is only safe because nothing in the container can write the file.
+[Why you add the mount](#why-you-add-the-mount) tells why the feature cannot declare it.
 
-A single-container devcontainer, in `.devcontainer/devcontainer.json`:
+For a single container, in `.devcontainer/devcontainer.json`:
 
 ```jsonc
+"features": {
+  "ghcr.io/nshafer/devcontainer-features/sandbox:3": {},
+  "ghcr.io/nshafer/devcontainer-features/egress-filter:2": {
+    "presets": "debian,npm,github"
+  }
+},
 "mounts": [
   "type=bind,src=${localEnv:HOME}/.config/egress-filter,dst=/mnt/egress-filter,readonly"
 ]
 ```
 
-A compose project, in the service in your `docker-compose.yml`:
+For a Docker Compose project, put the mount in your service in `docker-compose.yml`:
 
 ```yaml
 services:
@@ -71,26 +92,27 @@ services:
       - ${HOME}/.config/egress-filter:/mnt/egress-filter:ro
 ```
 
-**Put it in the compose file there, not in `devcontainer.json`.** The CLI renders a
-`devcontainer.json` mount into its compose override file as `<source>:<target>`, which has no place
-for `readonly`, so that mount comes up read-write. The feature warns at container start when the
-mount is missing, and warns again when it is read-write.
+> **Caution:** The container does not start if `~/.config/egress-filter` does not exist on the host.
+> Do step 1 first.
 
-**A bind mount whose source does not exist stops the container from starting.** Docker does not
-create it, so do step 1 before step 2. With no mount at all the container starts as usual, the
-global list is simply not a source, and `egress-status` says `global: NOT MOUNTED`.
+In a Compose project, the mount must be in the Compose file. The CLI writes each
+`devcontainer.json` mount into its own Compose override file as `<source>:<target>`, which has no
+place for `readonly`. Compose merges volumes by target path, and the override file wins, so a `:ro`
+entry in `devcontainer.json` does not survive either.
 
-### 3. Optional: add the proxy to the container environment
+The feature warns at container start when the mount is missing, and warns again when the mount is
+read-write.
 
-Skip this for VS Code. The feature writes the proxy variables to `/etc/profile.d` and
-`/etc/environment`, the VS Code environment probe reads them, and VS Code applies the probe to the
-extension host. Every extension and every terminal has the proxy without this step.
+### 3. Add the proxy to the container environment (optional)
 
-Add it when something starts a process with a bare `docker exec` from outside VS Code — a CI step,
-a script, `devc exec sh`. Such a process inherits the container environment and nothing else, so it
-gets no proxy and every connection it makes is refused. Paste this into the same
-`.devcontainer/devcontainer.json`, beside `mounts`. It works for a compose project too: the CLI
-renders `containerEnv` into its override file as `environment`.
+Skip this step for VS Code. The feature writes the proxy variables to `/etc/profile.d` and
+`/etc/environment`. VS Code reads them with its environment probe and applies them to the extension
+host. Every extension and every terminal then has the proxy.
+
+Add this block when something starts a process with a plain `docker exec` from outside VS Code: a
+CI step, a script, or `devc exec sh`. Such a process reads neither file, so it gets no proxy, and
+the firewall rejects every connection that it makes. Put the block in `devcontainer.json`, next to
+`mounts`. It works in a Compose project too.
 
 ```jsonc
 "containerEnv": {
@@ -103,100 +125,69 @@ renders `containerEnv` into its override file as `environment`.
 }
 ```
 
-See [Processes started by `docker exec`](#processes-started-by-docker-exec) for what reaches which
-process, and for why the feature cannot add this for you.
-
-The block is the same on every machine. No subnet is in `NO_PROXY`, because the proxy forwards to
-this container's local subnets by address itself. Two things in it follow an option, and only those:
+The block is the same on every machine. Two things in it follow an option:
 
 - **The port** follows `proxyPort`.
-- **`NO_PROXY`** repeats the names from `noProxy`: `"localhost,127.0.0.1,::1,db,redis"` for
-  `"noProxy": "db,redis"`. `egress-status` names any that are missing.
+- **`NO_PROXY`** must repeat the names from the `noProxy` option. For `"noProxy": "db,redis"`,
+  write `"localhost,127.0.0.1,::1,db,redis"`.
 
-This feature also needs `sandbox` and its sudo drop. A remote user with sudo runs `iptables -F` and
-the whole filter is gone. Use the two features together.
+No subnet is in `NO_PROXY`, because the proxy reaches the local subnets by address itself.
+`egress-status` names anything that the block misses. See
+[Processes started by `docker exec`](#processes-started-by-docker-exec) for the detail.
 
-## Rootless Docker and Podman
+### 4. Rebuild the container and check the result
 
-This feature works under rootless Docker and under Podman, but the host has to be prepared. Three
-things differ, and the first one is the only one that stops the filter completely.
-
-**Load the kernel modules on the host.** A container cannot load a kernel module, and a rootless
-container may not even ask: its netfilter tables live in a user namespace, and a user namespace
-never autoloads. With a rootful `dockerd` this never shows, because the daemon writes its own
-`iptables` rules on the host and the modules are already loaded by the time any container starts. A
-Podman host may have used netfilter for nothing at all. Load them once, on the host:
-
-```bash
-printf '%s\n' ip_tables iptable_filter xt_conntrack xt_owner ipt_REJECT \
-  | sudo tee /etc/modules-load.d/devcontainer-egress.conf
-sudo systemctl restart systemd-modules-load
+```console
+$ egress-status
+egress-filter:
+  proxy          listening on 127.0.0.1:3128 as egressfilter
+  firewall       default deny, dns=true
+  dns            port 53 to 127.0.0.11 only
+  local          172.18.0.0/16 (direct, no proxy)
 ```
 
-A missing module does not leave a half-built firewall. The chain comes down, `up` returns non-zero,
-and the reason is written where an unprivileged reader can see it — run `egress-status`, and read
-`/var/log/devcontainer/egress-filter.log` for the full text. The container starts with egress open
-and says so, which is the same trade the rest of this feature makes.
+Then run `curl https://example.com`. It must fail with `CONNECT tunnel failed, response 403`.
 
-**Set `localNetworks` yourself under Podman.** Podman 5 uses `pasta` by default, and `pasta` copies
-the host's address and routes into the container. `auto` reads the routing table, so it sees your
-LAN subnet, accepts it as private, and opens your whole home network. Name the setting instead:
+## Allow a host
 
-```json
-"features": {
-    "ghcr.io/nshafer/devcontainer-features/egress-filter:2": { "localNetworks": "off" }
-}
-```
+### The five sources of the allowlist
 
-`slirp4netns` gives `10.0.2.0/24` and needs nothing. Under rootless Docker the subnet is the usual
-private bridge range, and `auto` is correct there.
+The feature merges five sources in this order. Each source adds hosts. The `deny` option runs last
+and only removes hosts.
 
-**Relabel the mount under SELinux.** On Fedora and RHEL the read-only bind mount of
-`~/.config/egress-filter` carries no SELinux option, so the container cannot read the global list.
-Relabel the directory on the host:
+| Source      | Where                                                             | Scope                        | Applies             |
+| ----------- | ----------------------------------------------------------------- | ---------------------------- | ------------------- |
+| baseline    | Built in. Turn it off with `"baseline": false`.                   | What VS Code needs.          | At container start.  |
+| presets     | The `presets` option in `devcontainer.json`.                      | Whole ecosystems by name.    | At container start.  |
+| global      | `~/.config/egress-filter/allowlist.txt` on your host.             | Every container on this machine. | In about 2 seconds. |
+| project     | `.devcontainer/egress-allow.txt` in the repository.               | This project.                | At container start.  |
+| options     | `allow` and `deny` in `devcontainer.json`.                        | This container.              | At container start.  |
 
-```bash
-chcon -Rt container_file_t ~/.config/egress-filter
-```
+"At container start" means that you must restart the container. A rebuild is not necessary.
 
-One thing to confirm on your own host: `-m owner --uid-owner` is the whole enforcement boundary, and
-it has to match the proxy's uid inside the user namespace. Recent kernels map the uid through the
-network namespace owner, so it holds. Run `egress-status` after the first build and read the
-`firewall` line before you trust it.
+**Only the global list applies while the container runs.** It is a read-only mount of a file on
+your machine, so nothing in the container can change it. A root loop in the container re-reads it
+every 2 seconds. The project list is in the repository, which the remote user can write, so the
+feature reads it one time at container start. To widen the project list, a person must edit a file
+in git and restart the container. That is visible in a diff.
 
-## Notes
+**There is no command that adds a host from inside the container.** Any such command would be a way
+for an agent to widen its own access, which is what this feature exists to prevent. `egress-status`
+shows what applies, and it only reads.
 
-Default-deny outbound networking, decided by hostname. Two halves work together:
+### The format of a list
 
-- **The firewall is the control.** `iptables` rejects everything outbound except loopback,
-  established connections, DNS, and traffic owned by one dedicated uid — the proxy's. Nothing the
-  agent runs is that uid, so there is no route off the machine that does not go through the proxy.
-  `HTTP_PROXY` is set as a convenience. A tool that ignores it gets `REJECT`, not a bypass.
-- **The proxy is the policy.** It filters on the hostname in the `CONNECT` request, so the lists are
-  domains rather than addresses. **There is no TLS interception and no CA to install.**
+One host for each line. A `#` starts a comment.
 
-That split is what makes the lists pleasant. Changing one is a proxy reload, never a firewall
-change, so nothing is briefly open while you edit. The proxy is briefly *closed* instead: squid
-shuts its listening socket for a fraction of a second when it re-reads the list, and a request in
-that window is refused rather than allowed. One retry at worst, and the right way round for a
-filter.
+| Line               | What it allows                                        |
+| ------------------ | ----------------------------------------------------- |
+| `example.com`      | That host only.                                       |
+| `.github.com`      | `github.com` and every subdomain of it.               |
+| ` ^.*\.example\.com$ ` | A regular expression passes through as it is.     |
 
-### The allowlist
+### Presets
 
-**Five sources, merged in order.** Later sources only add. `deny` is applied last and only removes:
-
-| source | where | for |
-| --- | --- | --- |
-| baseline | built in, `baseline: false` to drop | what VS Code needs to attach and install extensions |
-| presets | `presets` in `devcontainer.json` | whole ecosystems by name — `debian`, `npm`, `go`, … |
-| global | `~/.config/egress-filter/allowlist.txt` on the host, on a read-only mount you declare | every container on this machine |
-| project | `.devcontainer/egress-allow.txt` in the repo | this project |
-| option | `allow` / `deny` in `devcontainer.json` | this container |
-
-A bare name means that host. A leading dot means the domain and its subdomains. Anything that
-already looks like a regex passes through.
-
-**`presets` saves you from maintaining forty hostnames by hand.** Name the ecosystems instead:
+A preset is a small list of hosts for one ecosystem. Name the ecosystems instead of 40 hosts:
 
 ```jsonc
 "ghcr.io/nshafer/devcontainer-features/egress-filter:2": {
@@ -204,20 +195,31 @@ already looks like a regex passes through.
 }
 ```
 
-Available: `debian`, `ubuntu`, `alpine`, `npm`, `hex`, `go`, `python`, `rust`, `github`, `githubcopilot`, `gitlab`,
-`docker`, `claude`. Each one is a small commented file under `src/egress-filter/presets/`. The comments say which
-entries the author verified against a real image or client and which the author did not. The apt mirrors, npm registry,
-Go proxy and Hex repo come from the running tools. The rest are first guesses. An unknown name is a **warning that lists
-the valid ones**, never a silent no-op.
+The presets are `debian`, `ubuntu`, `alpine`, `npm`, `hex`, `go`, `python`, `rust`, `github`,
+`githubcopilot`, `gitlab`, `docker` and `claude`. Each one is a commented file in
+[`src/egress-filter/presets/`](presets). The comments say which entries come from a real image or
+client, and which are a first guess. An unknown name gives a warning that lists the valid names.
 
-Two presets are easy to get wrong, and the feature handles both. `go` needs the *source* hosts as
-well as the proxy, because `GOPROXY` ends in `,direct`. `docker` needs three hosts, since a missing
-CDN fails only *after* the client has signed in.
+### Find the hosts that you need
 
-**`/etc/devcontainer/egress-filter/allowlist.txt` shows exactly what applied.** `allow.regex` is
-what the proxy reads, and it is unreadable at a glance — anchored, escaped, sorted, with no trace of
-where any line came from. The concatenated file is the same content before that transformation,
-every source in merge order behind a header, with each source's own comments intact:
+`egress-denied` prints every host that the container asked for and did not reach, with a count. So
+you allow what the build needed, and not a larger list:
+
+```console
+$ egress-denied
+Hosts this container asked for and was refused:
+
+  REQUESTS  HOST
+         3  registry.npmjs.org
+         1  objects.githubusercontent.com
+```
+
+It reads only and needs no privileges.
+
+### See what applied
+
+The file `/etc/devcontainer/egress-filter/allowlist.txt` holds the merged list with a header for
+each source, in merge order, with the comments of each source:
 
 ```
 # ============================================================================
@@ -232,56 +234,88 @@ proxy.golang.org
 # removed: gopkg.in
 ```
 
-`egress-status` names this file on the pattern-count line, so you can find it without knowing it
-exists. The feature rewrites it on every reload and says so. The thing to edit is whichever source
-the header points at. The feature records `deny` as a removal rather than a silent omission, since a
-host quietly missing from a merged list is the hardest kind of allowlist question to answer.
+The feature writes this file again at each reload. The header tells you which source to edit. A
+host that `deny` removed is listed as removed, not left out, because a host that is quietly missing
+from a merged list is the hardest question to answer.
 
-### Sibling containers, and docker-compose
+`allow.regex` is the file that the proxy reads. It is sorted, escaped and anchored, and it says
+nothing about where a line came from. Read the file above instead.
 
-**A dev container is often one service of a `docker-compose` project.** The others — Postgres on
-5432, Redis on 6379, MinIO on 9000 — are peers on the same docker network. Those connections never
-leave the machine and never touch the proxy, but a default-deny `OUTPUT` chain rejects them exactly
-like a connection to the internet. The symptom is a database that looks down.
+## Commands and logs
 
-**`localNetworks` is the answer, and it is `auto` by default.** The firewall accepts traffic whose
-*destination* is one of the subnets this container is attached to, read from its own routing table:
+| Command or file                                        | What it is                                                  |
+| ------------------------------------------------------ | ----------------------------------------------------------- |
+| `egress-status`                                        | The active policy, and each file that it came from. Reads only. |
+| `egress-denied`                                        | Each refused host, with a count. Reads only.                 |
+| `/etc/devcontainer/egress-filter/allowlist.txt`        | The merged list, with a header for each source.             |
+| `/var/log/devcontainer/egress-filter.log`              | What the feature did at container start, and its warnings.  |
+| `/var/log/devcontainer/egress-filter-proxy.log`        | One line for each request. World-readable.                  |
+| `/var/log/devcontainer/egress-filter-squid.log`        | What the proxy said. Read this when the proxy does not run. |
 
-```
-$ egress-status
-egress-filter:
-  proxy          listening on 127.0.0.1:3128 as egressfilter
-  firewall       default deny, dns=true
-  dns            port 53 to 127.0.0.11 only
-  local          172.18.0.0/16 (direct, no proxy)
-```
+## What a blocked request looks like
 
-The match is on the destination address, so a packet bound for the internet never qualifies. It
-carries an address outside the subnet, even though it leaves through the same gateway.
+The error is almost always a bare 403 from the proxy, and most tools describe it badly:
 
-`auto` accepts a subnet only when it is private — `10/8`, `172.16/12`, `192.168/16`, `100.64/10`,
-`169.254/16`. A public subnet on an interface means host networking or a `macvlan`, where "the local
-network" is the internet, and opening it would undo the filter. That case is a warning and a skip.
+| Tool              | What you see                                                    |
+| ----------------- | --------------------------------------------------------------- |
+| `curl` (https)    | `curl: (56) CONNECT tunnel failed, response 403`                |
+| `curl` (http)     | An HTML page with the title *Blocked by egress-filter*          |
+| `git`             | `fatal: unable to access '...': CONNECT tunnel failed, response 403` |
+| `npm`             | `npm error 403 Forbidden`, then advice about package versions    |
+| `dig @8.8.8.8`    | A timeout, or `connection refused`                              |
 
-**The proxy reaches these subnets too, by address.** A client that reads `HTTP_PROXY` sends a
-request for `http://172.18.0.5:9000` to the proxy rather than straight to the peer. The allowlist is
-hostnames, so the proxy used to deny that, and `NO_PROXY` had to name every subnet to keep such a
-client off the proxy — a list that changed with every machine. Now `build_list` turns each subnet
-into an anchored address pattern, and the request reaches the peer either way. For `172.18.0.0/16`
-the pattern is
+So the feature explains the block in three places, because an agent that sees a 403 retries,
+changes registry, or turns off certificate checks. None of those can work here, and the last one is
+harmful.
+
+- The 403 page of the proxy names the feature, the refused host and what to do.
+- `/usr/local/share/devcontainer/egress-filter/BLOCKED.md` says the same at length, for any tool.
+  The `postAttach` output points at it.
+- The same text is installed as a Claude skill at `~/.claude/skills/egress-filter/SKILL.md`. The
+  feature writes it at container start, because `persist-homedir` hides what the image left in the
+  home directory.
+
+A skill is model-invoked. Claude reads the name and description of each skill at all times, and
+loads the body when it judges the skill relevant. So the description names the symptoms that an
+agent sees, such as a 403 or a `CONNECT tunnel failed` message, and tells it to read the skill
+before it retries. Claude may not load it, which is why the 403 page and `BLOCKED.md` carry the same
+text.
+
+All of it is instructions and no access. The agent still cannot widen the list.
+
+## Other containers on the same network
+
+**A dev container is often one service of a Docker Compose project.** The other services, such as
+Postgres on 5432 or Redis on 6379, are on the same Docker network. Those connections never leave
+the machine and never reach the proxy, but a default-deny firewall rejects them like any other
+outbound connection. The symptom is a database that looks down.
+
+**The `localNetworks` option is the answer, and `auto` is the default.** The firewall accepts
+traffic to the subnets that this container is attached to, read from its own routing table.
+`egress-status` lists them on the `local` line. The match is on the destination address, so a packet
+to the internet never matches. It has an address outside the subnet, even though it leaves through
+the same gateway.
+
+`auto` accepts a subnet only when the subnet is private: `10/8`, `172.16/12`, `192.168/16`,
+`100.64/10` or `169.254/16`. A public subnet on an interface means host networking or a `macvlan`,
+where "the local network" is the internet. That case gives a warning, and the feature skips the
+subnet.
+
+**The proxy also reaches these subnets, by address.** A client that reads `HTTP_PROXY` sends a
+request for `http://172.18.0.5:9000` to the proxy instead of to the peer. So the feature turns each
+local subnet into an address pattern in the allowlist. For `172.18.0.0/16` the pattern is:
 
 ```
 ^172\.18\.[0-9]{1,3}\.[0-9]{1,3}$
 ```
 
-Nothing is widened: every process here could already reach the peer directly. What it buys is a
-`NO_PROXY` with no subnet in it, which is what lets the `containerEnv` block in step 3 be the same
-everywhere. `egress-status` lists the subnets under `local`, and the allowlist file shows the
-pattern each one became.
+This widens nothing, because every program in the container can already reach the peer directly.
+What it buys is a `NO_PROXY` with no subnet in it, so the block in step 3 is the same on every
+machine.
 
-**Name the services in `noProxy` if you talk HTTP to them.** A name is not an address, so no pattern
-covers `http://db:8080`, and the proxy denies it. The feature cannot know what compose called the
-service, so you say it, and the same names go into the `containerEnv` block:
+**Name your services in `noProxy` if you use HTTP to reach them.** A name is not an address, so no
+pattern matches `http://db:8080`, and the proxy denies it. The feature cannot know the names, so you
+give them, and you put the same names in the `containerEnv` block:
 
 ```jsonc
 "ghcr.io/nshafer/devcontainer-features/egress-filter:2": {
@@ -290,55 +324,48 @@ service, so you say it, and the same names go into the `containerEnv` block:
 }
 ```
 
-**The relaxation is real, and worth naming.** The subnet holds the docker gateway, which is the
-host, and every other container on that network. Those peers usually have unfiltered internet
-access, so an agent that reaches one and makes it relay is out. This is a trade of local
-reachability against that, taken because a filter that breaks the project's own database is a filter
-people turn off. Two ways to tighten it:
+**This is a real relaxation.** The subnet holds the Docker gateway, which is your host, and every
+other container on that network. Those containers usually have full internet access, so an agent
+that reaches one and makes it fetch something is out of the container. The trade is deliberate: a
+filter that breaks the database of the project is a filter that people turn off. Two ways to make
+it tighter:
 
-| you want | set |
-| --- | --- |
-| one peer only | `"localNetworks": "172.18.0.5/32"` |
-| no local access at all | `"localNetworks": "off"` |
+| What you want            | What to set                              |
+| ------------------------ | ---------------------------------------- |
+| One peer only            | `"localNetworks": "172.18.0.5/32"`       |
+| No local access at all   | `"localNetworks": "off"`                 |
 
-Addresses from docker are not stable across a `docker compose up`, so a `/32` needs a static address
-on the compose network to stay correct.
+Docker addresses change between runs of `docker compose up`, so a `/32` needs a static address on
+the Compose network.
 
-**Put the global allowlist mount in the compose file, not in `devcontainer.json`.** The CLI renders
-every `devcontainer.json` mount into its compose override file as `<source>:<target>`, the short
-volume syntax, which has no place for `readonly`. A `:ro` entry of your own in `devcontainer.json`
-does not survive either: compose merges volumes by target path and the override file comes last, so
-the override wins. The compose file is the one place where `:ro` holds. See
-[The mount is yours](#the-mount-is-yours) and [Host setup](#host-setup).
+## Docker inside the container
 
-### Docker inside the container
+**An inner Docker daemon goes around the firewall twice.** Add
+`ghcr.io/devcontainers/features/docker-in-docker` and two holes open:
 
-**An inner Docker daemon walks around the `OUTPUT` chain twice.** Add
-`ghcr.io/devcontainers/features/docker-in-docker` and two holes open at once:
+| What                                | Why the firewall misses it                                                |
+| ----------------------------------- | ------------------------------------------------------------------------- |
+| Image pulls by the daemon           | The daemon runs as root, so the reject rule stops it. The error reads like a registry timeout, which sends you to the registry and not to the filter. |
+| Containers that the daemon starts   | Each one has its own network namespace. Its packets go through the `FORWARD` chain, never `OUTPUT`, so the user match never sees them. |
 
-| what | why the chain misses it |
-| --- | --- |
-| `dockerd`'s own image pulls | It runs as root, so it lands on the `REJECT`. The failure reads as a registry timeout, which sends you to the registry rather than to the filter. |
-| Containers that `dockerd` starts | Each one has its own network namespace. Its packets are `FORWARD`ed, never `OUTPUT`, so `-m owner` never sees them. |
+The second one was a complete bypass: `docker run alpine wget https://anywhere` returned the page.
 
-The second one was a complete bypass. `docker run alpine wget https://anywhere` returned the page.
+**The feature closes both, and only when a Docker daemon is installed.** There is no option to set.
+A container without an inner daemon sees no change.
 
-**The feature closes both, and does it only when `dockerd` is installed.** There is no option to
-set. A container without an inner daemon sees no change at all.
+| Piece                            | What it does                                                                 |
+| -------------------------------- | ---------------------------------------------------------------------------- |
+| `/etc/docker/daemon.json`        | A `proxies` block that points at `127.0.0.1:3128`. The daemon shares the network namespace of this container, so its loopback is ours. |
+| The proxy listens on every address | `127.0.0.1` inside a started container is that container's own loopback, not ours. |
+| `~/.docker/config.json`          | A `proxies.default` block with the bridge address. `docker run` and `docker build` copy it into every container that they start. |
+| The `DOCKER-USER` chain          | The same default deny as the `OUTPUT` chain, for the `FORWARD` path. DNS goes to the pinned servers, and the chain rejects the rest. |
+| An `INPUT` rule                  | Drops the proxy port on the way in from the network that this container is on, so the proxy is not open to other containers. |
 
-| piece | what it does |
-| --- | --- |
-| `/etc/docker/daemon.json` | A `proxies` block pointing at `127.0.0.1:3128`. `dockerd` shares this container's network namespace, so its loopback is ours and the `-o lo` rule lets it through. |
-| The proxy listens on every address | `127.0.0.1` inside a container is that container's own loopback, not ours. Binding named addresses would need a proxy restart every time a `docker network create` added one. |
-| `~/.docker/config.json` | A `proxies.default` block naming the **bridge** address, not `eth0`. `docker run` and `docker build` copy it into every container they start. |
-| `DOCKER-USER` | The same default deny as the `OUTPUT` chain, applied to the `FORWARD` path: DNS goes to the pinned resolvers, and the chain rejects everything else bound for the outside world. |
-| An `INPUT` rule | Drops the proxy port on the way in from the network this container arrived on, so listening on the container address does not offer the proxy to every sibling. |
+The feature **merges both JSON files and overwrites neither**. Registry logins in `config.json` and
+a `log-driver` in `daemon.json` stay. The merge needs `python3`. Without `python3`, and when the
+file exists, the feature prints the block to add and changes nothing.
 
-The feature **merges both JSON files and overwrites neither**. Registry credentials in `config.json` and a
-`log-driver` in `daemon.json` survive. The merge uses `python3`. Where there is no `python3` and the
-file already exists, the feature prints the block to add and does not touch the file.
-
-```
+```console
 $ egress-status
 egress-filter:
   proxy          listening on 127.0.0.1:3128 as egressfilter
@@ -348,145 +375,117 @@ egress-filter:
   docker         filtered via http://172.17.0.2:3128, deny out eth0
 ```
 
-**`DOCKER-USER` is the chain to use, and the daemon has to be running for it to matter.** Docker
-promises never to rewrite that chain, and it consults it before every rule it owns. This feature's
-entrypoint runs *before* `docker-init.sh`, so at that moment there is no daemon, no `docker0`, and —
-because `docker-init.sh` may switch the `iptables` backend between `legacy` and `nft` — possibly not
-even the right table. So the watcher already running for the global list also watches the interface
-set and the resolved `iptables` binary, and re-applies the firewall when either moves. Re-applying
-is safe: it empties each chain before it fills it, so this converges instead of stacking.
+**The feature watches for Docker networks and applies the rules again.** Docker promises never to
+rewrite the `DOCKER-USER` chain, and it reads that chain before its own rules. But the entrypoint of
+this feature runs before the Docker daemon starts, so at that moment there is no daemon, no
+`docker0`, and possibly not the right `iptables` backend. So the loop that watches the global list
+also watches the set of interfaces and the `iptables` program, and applies the firewall again when
+either one changes. That pass also adds the inner bridge subnet to `localNetworks`, which `auto`
+cannot see at container start.
 
-That same pass is what puts the inner bridge into `localNetworks`. `auto` cannot see `172.18.0.0/16`
-at container start, because `dockerd` has not created it yet.
-
-**Re-applying flushes each chain before it fills it**, so there is a window of about a millisecond
-where the `OUTPUT` chain is empty and its policy is `ACCEPT`. That is how `apply_firewall` has always
-worked — the `firewall` subcommand does the same thing — but with an inner daemon it now happens
-again on each `docker network create` or `docker compose up` rather than once at container start. It
-takes a process already running and already racing to use one.
-
-**`dockerd` reads `daemon.json` once, when it starts, so when the file is written decides whether it
-works.** Entrypoints run in install order. List `docker-in-docker` before `egress-filter` and its
-entrypoint runs first, `dockerd` comes up before `egress.sh` gets a turn, and the file arrives too
-late to be read. The daemon then pulls without the proxy for the life of the container, and the
-failure looks like a registry timeout.
-
-Three things close that:
-
-| when | what |
-| --- | --- |
-| build time | `install.sh` writes `daemon.json` into the image. In the bad ordering `dockerd` is already installed by then, so the file is on disk before any daemon can start. |
-| container start | `egress.sh` writes it again, with the real local subnets, which the build could not know. |
-| after the firewall | `egress.sh` asks the running daemon what proxy it has. If the answer is wrong it restarts the daemon — but only when no containers are running. |
-
-**The restart never takes a running container with it.** Where containers are running, `egress.sh`
-warns, changes nothing, and prints the command. That case needs a person:
+**The daemon reads `daemon.json` one time, when it starts.** So the order matters. The feature
+writes the file three times for that reason: at build time into the image, at container start with
+the real local subnets, and again after the firewall if the running daemon reports the wrong proxy.
+In the last case the feature restarts the daemon, but only when no containers are running. When
+containers run, it warns, changes nothing, and prints the command for you:
 
 ```
 pkill dockerd; pkill containerd; /usr/local/share/docker-init.sh
 ```
 
-**Every report about the daemon asks the daemon, not the file.** `egress-status` runs
-`docker info` and prints a second `docker` line when the two disagree. A correct `daemon.json` and an
-unproxied daemon look identical from the file, and that pair used to report success — which sent
-people to read the allowlist when the daemon was the problem.
+**Every report asks the daemon, not the file.** `egress-status` runs `docker info` and prints a
+second `docker` line when the two disagree. A correct `daemon.json` and an unproxied daemon look
+the same in the file.
 
-### A dev container inside a dev container
+Two more things to expect. A container that you start is filtered by host name exactly like this
+one, so an image build that fetches an unlisted host fails the same way. And the proxy variables
+that reach such a container come from `config.json`, so `docker run -e HTTP_PROXY=` clears them. The
+`DOCKER-USER` deny still holds after that.
 
-**The inner filter has no route out of its own.** The proxy it starts is a container of the *outer*
-daemon, so the outer `DOCKER-USER` chain rejects it exactly like any other container. Every request
-in the inner container then fails, and the inner allowlist is not the reason.
+## A dev container inside a dev container
 
-**`upstreamProxy` gives it one, and `auto` is the default.** The proxy takes a squid `cache_peer`
-line pointing at the outer proxy, so requests go inner proxy → outer proxy → the host:
+**The inner filter has no way out.** The proxy that it starts is a container of the **outer**
+daemon, so the outer `DOCKER-USER` chain rejects it like any other container. Every request in the
+inner container fails, and the inner allowlist is not the reason.
 
-```
+**The `upstreamProxy` option gives it a way out, and `auto` is the default.** The inner proxy sends
+what it cannot reach to the outer proxy, which sends it to the host.
+
+```console
 $ egress-status
 egress-filter:
   proxy          listening on 127.0.0.1:3128 as egressfilter
   upstream       via 172.17.0.2:3128 -- both allowlists apply
 ```
 
-**Peers on the local subnets do not take the chain.** The generated config carries an
-`always_direct` rule over a `dst` match for each subnet `localNetworks` opened, so a request for a
-peer goes to the peer. Without that rule it would go up the chain like everything else, and the
-outer proxy would refuse an address it has no pattern for, with a 403 that reads as the inner
-list's fault.
+**Nothing is widened.** A host must be on both lists. The inner proxy refuses first on its own
+list, and the outer proxy refuses after on its own. Two containers deep means two allowlists, and
+the outer one always wins.
 
-**Nothing is widened by this.** A host has to be on *both* lists to be reached. The inner proxy
-refuses first on its own list, and the outer proxy refuses after on its own. Two containers deep is
-two allowlists, and the outer one always wins.
+**Peers on the local subnets do not go up the chain.** The generated proxy config sends a request
+for a local address straight to the peer. Without that rule, it would go to the outer proxy, which
+has no pattern for that address, and the 403 would read like a fault of the inner list.
 
-`auto` reads `HTTP_PROXY` from the container's own PID 1 — the environment the runtime handed the
-container, which nothing inside it can rewrite. It is deliberately *not* this script's environment:
-`/etc/environment` names this proxy, so a second `egress.sh up` run from a shell would read its own
-address back and chain the proxy to itself. A self-chain is caught and dropped either way.
+`auto` reads `HTTP_PROXY` from PID 1 of the container, which is the environment that the runtime
+gave the container. Nothing inside the container can change it. The script does not read its own
+environment, because `/etc/environment` names this proxy, and the proxy would then chain to itself.
+The feature detects a self-chain and drops it.
 
-| you want | set |
-| --- | --- |
-| chain to whatever the runtime gave this container | `"upstreamProxy": "auto"` (the default) |
-| never chain | `"upstreamProxy": "off"` |
-| a corporate proxy the environment does not name | `"upstreamProxy": "proxy.corp:8080"` |
+| What you want                                            | What to set                            |
+| -------------------------------------------------------- | -------------------------------------- |
+| Chain to the proxy that the runtime gave this container   | `"upstreamProxy": "auto"` (the default) |
+| Never chain                                               | `"upstreamProxy": "off"`               |
+| A company proxy that the environment does not name        | `"upstreamProxy": "proxy.corp:8080"`   |
 
-The address the outer container hands down is its own, and `docker run` copies it in — see
-`config.json` above. So a nested container needs no configuration for this to work.
-
-**The outer proxy is also reachable directly, and the firewall keeps everything but the proxy away
-from it.** That address sits on a local network, and `localNetworks: auto` opens local networks by
-default. Without a rule, anything in the inner container connects to the outer proxy itself and is
-filtered by the *outer* list — the wider of the two, because the inner one is applied on top of it.
-So the chain rejects that address for every uid except the proxy's, above the local-network accepts:
+**The outer proxy is also reachable directly, and the firewall stops that.** The address of the
+outer proxy is on a local network, and `localNetworks: auto` opens local networks. Without a rule,
+a program in the inner container could connect to the outer proxy itself, and get the outer list,
+which is the wider of the two. So the chain rejects that address for every user except the proxy:
 
 ```
 -A DEVCONTAINER_EGRESS -d 172.18.0.1/32 -p tcp --dport 3128 -m owner ! --uid-owner 995 -j REJECT
 -A DEVCONTAINER_EGRESS -d 172.18.0.0/16 -j ACCEPT
 ```
 
-Both addresses are covered: the upstream this proxy chains to, and whatever `HTTP_PROXY` on PID 1
-names. They are usually the same one. The proxy still chains through it and nothing else reaches it.
-A proxy on `127.0.0.1` is the one exception, because the loopback accept sits above every rule in
-the chain and narrowing it would close the route to this feature's own proxy.
+A proxy on `127.0.0.1` is the one exception, because the loopback accept is above every rule in the
+chain.
 
-**One client shape does not survive the extra hop, and busybox is the one that sends it.** Alpine's
-`wget` cannot do TLS through a proxy, so for an `https://` URL it sends `GET https://host/...`
-instead of a `CONNECT`. A single proxy answers that on its own. A chained pair does not: an absolute
-`https://` URL handed to a parent proxy is not a request a proxy has to fetch, and the outer one
-refuses it for a host that is on both lists. Measured on the chain: plain `http`, and any real
-`CONNECT`, both return 200. `curl`, `git`, `apt`, `npm` and the language toolchains all send
-`CONNECT`. Only reach for `apk add curl` when a busybox container has to fetch `https` from two
-containers deep.
+**One kind of client does not survive the extra hop.** The `wget` in busybox cannot do TLS through a
+proxy, so for an `https://` URL it sends `GET https://host/...` instead of a `CONNECT` request. One
+proxy answers that. A pair of chained proxies does not. Measured on a chain: plain HTTP and any
+real `CONNECT` request both return 200. `curl`, `git`, `apt`, `npm` and the language toolchains all
+send `CONNECT`. Run `apk add curl` when a busybox container two levels deep must fetch HTTPS.
 
-**Two things follow from this that are worth expecting.** A container you start is filtered by
-hostname exactly like this one, so an image that pulls from a host you have not allowed fails the
-same way — read `egress-denied`. And the proxy variables that reach a container are the ones in
-`config.json`, so `docker run -e HTTP_PROXY=` clears them; the `DOCKER-USER` deny is what still
-holds after that.
+## Processes started by `docker exec`
 
-### Processes started by `docker exec`
+**A plain `docker exec` from outside VS Code gets no proxy unless your `devcontainer.json` has the
+`containerEnv` block. Everything that VS Code starts works without it.** The feature writes the
+proxy variables to two files, and a process must read one of them:
 
-**A bare `docker exec` from outside VS Code gets no proxy unless your `devcontainer.json` carries
-`containerEnv`. Everything VS Code starts is fine without it.** The feature writes the proxy
-variables to two files, and a process has to read one of them:
+| Channel                                           | Who reads it                                   | Written              |
+| ------------------------------------------------- | ---------------------------------------------- | -------------------- |
+| `/etc/profile.d/00-devcontainer-egress-filter.sh` | A login shell, and the VS Code environment probe | At build time, into the image. |
+| `/etc/environment`                                | PAM, so a `su` session too                     | At container start.  |
+| `containerEnv` in your `devcontainer.json`        | Every process in the container, `docker exec` included | By you.      |
 
-| channel | who reads it | written |
-| --- | --- | --- |
-| `/etc/profile.d/00-devcontainer-egress-filter.sh` | a login shell, and the VS Code environment probe | at build time, into the image |
-| `/etc/environment` | PAM, so a `su` session too | at container start |
-| `containerEnv` in your `devcontainer.json` | every process in the container, `docker exec` included | by you |
-
-A terminal goes through both, so `HTTP_PROXY` is there and everything works. So does the extension
-host: VS Code runs the probe once at server start and applies the result to it, and measured in a
-container of this feature, the extension host carries all six variables while the server process
-that started it carries none. A process that a tool starts with a plain `docker exec` from outside
-reads neither file, and the difference is visible from the host:
+A terminal reads both files, so it works. The extension host works too: VS Code runs the probe one
+time at server start and applies the result. Measured in a container of this feature, the extension
+host has all six variables, and the server process that started it has none. A process from a plain
+`docker exec` reads neither file:
 
 ```console
 $ docker exec my-container sh -c 'env | grep -ci proxy'
 0
 ```
 
-**Why the profile.d file goes into the image.** VS Code execs its server into the container as soon
-as the container runs, which can be seconds before this feature's entrypoint gets a turn:
+**Expect connection failures in exactly those processes until you add the block.** A VS Code
+extension, a language server, a task, or a CI step gets no proxy, and the firewall refuses every
+connection that it makes. You see a timeout, a hang, a TLS error, or a registry that looks down.
+You do not see a missing variable, and a terminal in the same container keeps working, which is what
+makes this expensive to find.
+
+**Why the profile file goes into the image.** VS Code starts its server in the container as soon as
+the container runs, which can be seconds before the entrypoint of this feature runs:
 
 ```
 19:05:56.0  container PID 1 starts
@@ -495,94 +494,38 @@ as the container runs, which can be seconds before this feature's entrypoint get
 19:05:58.4  writes /etc/profile.d/00-devcontainer-egress-filter.sh
 ```
 
-The server runs its environment probe at start — a login shell, by default — and what that probe
-returns is what the extension host and every process it starts carry for the life of the window. A
-probe that ran before the file existed finds no proxy, and nothing corrects it later: the terminal
-you open afterwards works, and the extension beside it does not. So `install.sh` writes the file
-into the image and the ordering stops mattering. `up` rewrites it at container start with the real
-local subnets, and only when the content changes.
+The server runs its environment probe at start, and the result is what the extension host carries
+for the life of the window. A probe that ran before the file existed finds no proxy, and nothing
+corrects it later. So the file is in the image, and the order stops mattering. The feature writes
+the file again at container start, with the real local subnets, and only when the content changed.
 
-`/etc/environment` stays at container start on purpose. `pam_env` reads it for `su`, and a build-time
-copy would point a later feature that installs anything as the remote user at a proxy that does not
-exist yet.
+`/etc/environment` stays a container-start file on purpose. A build-time copy would point a later
+feature at a proxy that does not exist yet.
 
-**The CLI writes to `/etc/environment` as well, and it writes last.** After the entrypoint runs, it
-appends the whole container environment to that file — `containerEnv` included. `pam_env` takes the
-last assignment, so a `containerEnv` with an incomplete `NO_PROXY` overrides the list this feature
-wrote a second earlier. Two rules follow from that, and both are in `write_proxy_env`:
+**The CLI also writes to `/etc/environment`, and it writes last.** After the entrypoint runs, the
+CLI appends the whole container environment to that file, `containerEnv` included. PAM takes the
+last assignment, so a `containerEnv` with an incomplete `NO_PROXY` overrides the list that this
+feature wrote a second earlier. Two rules follow:
 
-- When the container environment already carries the right values, the feature writes no block at
-  all. The CLI's copy says the same thing, and a second copy of every variable only confuses whoever
-  opens the file next.
-- When it does not, the watcher rewrites the block every couple of seconds until it is the last one
-  in the file. That fixes a login shell and a `su` session. It cannot fix a process started with
-  `docker exec`, which never reads the file — only `containerEnv` reaches that one, which is why
-  `status` reports the mismatch instead of quietly repairing it.
+- When the container environment already has the right values, the feature writes no block at all.
+- When it does not, the watcher writes the block again every couple of seconds, until the block is
+  last in the file. That fixes a login shell and a `su` session. It cannot fix a `docker exec`
+  process, which never reads the file.
 
-**`containerEnv` ends the race rather than shortening it.** With the block in place the server
-inherits the proxy from the container config at the moment it is exec'd. No probe, no file, no
-ordering to lose.
+**Why the block has both spellings.** `curl` ignores an uppercase `HTTP_PROXY` on purpose, because a
+CGI request header arrives under that name. Measured in a container of this feature, against a host
+on no list:
 
-**Expect connection failures in exactly those processes until you add the block.** A VS Code
-extension, a language server, a task, a CI step, anything started with `docker exec` — each one gets
-no proxy, and the firewall refuses every connection it makes. What you see is a timeout, a hang, a
-TLS error, or a registry that looks down. What you do not see is a missing variable, and a terminal
-in the same container keeps working the whole time, which is what makes this one expensive to find.
+| What is set           | Plain HTTP through the proxy                              |
+| --------------------- | --------------------------------------------------------- |
+| `HTTP_PROXY` only     | `000`. `curl` went direct and the firewall rejected it.   |
+| `http_proxy` only     | `403`. `curl` used the proxy, which denied the host.      |
 
-The variables such a process inherits are the ones Docker stored when the container was created —
-the image `ENV`, plus every `-e` on `docker run`. Nothing inside a running container can add to that
-set. Only the project config can:
+Uppercase is the spelling that most other clients document, and `python`, `go` and `git` read
+either one. So the block has both.
 
-```jsonc
-"containerEnv": {
-  "HTTP_PROXY": "http://127.0.0.1:3128",
-  "HTTPS_PROXY": "http://127.0.0.1:3128",
-  "http_proxy": "http://127.0.0.1:3128",
-  "https_proxy": "http://127.0.0.1:3128",
-  "NO_PROXY": "localhost,127.0.0.1,::1",
-  "no_proxy": "localhost,127.0.0.1,::1"
-}
-```
-
-**Both cases earn their place.** `curl` ignores an uppercase `HTTP_PROXY` on purpose: a CGI request
-header arrives under that name, and honouring it was the httpoxy vulnerability. So plain HTTP needs
-`http_proxy` in lowercase. Measured in a container of this feature, against a host on no list:
-
-| set | plain HTTP through the proxy |
-| --- | --- |
-| `HTTP_PROXY` alone | `000` — curl went direct and the firewall rejected it |
-| `http_proxy` alone | `403` — curl used the proxy, which denied the host |
-
-Uppercase is the spelling most other clients document, and `python`, `go` and `git` read either. So
-the block carries both, and dropping a pair only costs you a client.
-
-`status` reports which of three states this container is in:
-
-```
-container env  set -- a bare docker exec inherits the proxy
-container env  not set -- fine for VS Code, not for a bare docker exec (see README)
-container env  http://172.18.0.1:3128 -- another proxy, refused by the firewall (see README)
-```
-
-A fourth state is the one that costs the most to find. The block names this proxy and its `NO_PROXY`
-does not repeat a name from the `noProxy` option:
-
-```
-container env  set, but NO_PROXY misses: db redis (see README)
-```
-
-One line each, and this page is the README they point at. The block to paste is in
-[step 3](#3-optional-add-the-proxy-to-the-container-environment), and only the port and the
-`noProxy` names in it ever change.
-
-The third state is a container of a filtered outer container. The outer feature writes a proxies
-block into the docker client config, and Docker puts it on PID 1 of everything it starts, so
-`HTTP_PROXY` is already there and it names the *outer* proxy. That proxy applies the outer list and
-not this one, so the firewall refuses a direct connection to it from every uid but the proxy's —
-see [A dev container inside a dev container](#a-dev-container-inside-a-dev-container).
-
-**Why the feature cannot add it for you.** The CLI emits a feature's `containerEnv` as a Dockerfile
-`ENV`, directly before that feature's own install step:
+**Why the feature cannot add the block.** The CLI writes the `containerEnv` of a feature into the
+generated Dockerfile as an `ENV` line, directly before the install step of that feature:
 
 ```dockerfile
 ENV HTTP_PROXY=http://127.0.0.1:3128
@@ -590,138 +533,132 @@ RUN ... ./devcontainer-features-install.sh   # egress-filter
 RUN ... ./devcontainer-features-install.sh   # every feature after it
 ```
 
-The proxy starts at container start, not during the build, so that address refuses every connection.
-`apt-get` inside this feature's `install.sh` fails, and so does every feature installed after it. A
-project `containerEnv` has none of that problem: the CLI passes it as `docker run -e`, and the build
-never sees it.
+The proxy starts at container start, not during the build, so that address refuses every
+connection. `apt-get` in the install script of this feature fails, and so does every feature after
+it. A `containerEnv` in your project has no such problem: the CLI passes it as `docker run -e`, and
+the build never sees it.
 
-**The block is static, and it is meant to be.** `containerEnv` is a fixed string in a config file.
-It cannot read the network, which is why no subnet is in it: the proxy forwards to the local subnets
-by address (see [Sibling containers](#sibling-containers-and-docker-compose)), so the list this
-feature writes is the same on every machine, and the block matches it. Three things still follow
-from an option, and only those:
+**What `egress-status` says about it.** One line, in one of four states:
 
-- **The port** follows `proxyPort`. Change both together.
-- **`NO_PROXY`** repeats the names from `noProxy`. A name is not an address, so no pattern covers
-  `http://db:8080`, and a client that reads the block sends it to the proxy, which denies it. The
-  names belong in the option and in the block, under both spellings.
-- **The upstream, in a nested dev container.** The outer proxy address reaches the inner container in
-  `HTTP_PROXY`, which is the variable this block overwrites, so `upstreamProxy: auto` finds nothing
-  to chain to. Set `upstreamProxy` to the outer address instead. See
-  [A dev container inside a dev container](#a-dev-container-inside-a-dev-container).
-
-`status` names what the block misses, in one line, and leaves the block itself to step 3.
-
-### Building a list from evidence
-
-**`egress-denied` is how you build a list from evidence.** It prints every host the container asked
-for and was refused, with counts. So you allow what the build actually needed rather than a generic
-superset:
-
-```console
-$ egress-denied
-Hosts this container asked for and was refused:
-
-  REQUESTS  HOST
-         3  registry.npmjs.org
-         1  objects.githubusercontent.com
+```
+container env  set -- a bare docker exec inherits the proxy
+container env  not set -- fine for VS Code, not for a bare docker exec (see README)
+container env  http://172.18.0.1:3128 -- another proxy, refused by the firewall (see README)
+container env  set, but NO_PROXY misses: db redis (see README)
 ```
 
-It only reads and needs no privileges. The feature pre-creates the proxy log owned by the proxy user
-and world-readable, so `egress-denied` can read every refusal. That file holds one line per request
-and nothing else. The proxy's own diagnostics — what it said while starting, and why it refused to —
-go to `/var/log/devcontainer/egress-filter-squid.log`, which is the file to read when
-`egress-status` says the proxy is not running.
+The third state is a container inside a filtered container. The outer feature writes a proxies block
+into the Docker client config, and Docker puts it on PID 1 of everything that it starts. So
+`HTTP_PROXY` already names the **outer** proxy. That proxy applies the outer list and not this one,
+so the firewall refuses a direct connection to it. See
+[A dev container inside a dev container](#a-dev-container-inside-a-dev-container).
 
-### The mount is yours
+## Why you add the mount
 
-**This feature declares no mount of its own, and version 1 did.** A feature's mount metadata is an
-object with `source`, `target` and `type`, and that object has no field for the read-only flag.
-Every way around it depends on how the container is built.
+A feature can declare mounts, but it cannot make a mount read-only in every setup. In a Docker
+Compose project, the CLI drops the `readonly` flag. A feature-declared mount would then give the
+container write access to the global list, and a program in the container could add a host to it,
+live, in 2 seconds. So the feature declares no mount, and you add it in the place where `readonly`
+works.
 
-The `docker run` path renders a mount as `--mount type=<type>,src=<source>,dst=<target>`, so an
-option on the end of a mount string reaches docker and `readonly` holds. A compose project renders
-each mount as `<source>:<target>` instead, which has no place for an option. No single mount value
-is read-only in both modes.
+The feature checks what it got. A missing mount and a read-write mount each get their own warning in
+`/var/log/devcontainer/egress-filter.log`. `egress-status` reports a missing mount as
+`global: NOT MOUNTED`.
 
-So a feature-declared mount promises the read-only global list this feature's whole watch model
-rests on, and hands half its users a writable one — a file the container's own user can append a
-hostname to, with the change live in two seconds. Version 1 did worse than that. It carried the flag
-on the end of the target, `"target": "/mnt/egress-filter,readonly"`, which docker reads as an option
-under `docker run` only: under compose it mounted the directory at a path literally named
-`egress-filter,readonly`, read-write, and the global list was silently not a source at all.
+## Rootless Docker and Podman
 
-The mount belongs to whoever knows which mode the container is in, and that is you. The feature
-checks what it got. A missing mount and a read-write mount each get their own warning at container
-start, in `/var/log/devcontainer/egress-filter.log`, and `egress-status` names a missing one on the
-`global:` line.
+This feature works under rootless Docker and under Podman, but the host needs preparation.
 
-### Who can widen the list, and when
+**Load the kernel modules on the host.** A container cannot load a kernel module. A rootless
+container cannot even ask, because its netfilter tables are in a user namespace, and a user
+namespace never loads a module. With a normal `dockerd`, the modules are already loaded, because the
+daemon writes its own rules on the host. A Podman host may never have used netfilter at all. Load
+the modules one time, on the host:
 
-**Only the global list is re-read while the container runs, and that asymmetry is the point.** It is
-a read-only mount of a file on your machine, so nothing inside the container can write it. The only
-party who can change it is you, at the keyboard, and a root loop applies the change within two
-seconds. The project list lives in the repo, which the container's own user *can* write, so the
-feature reads it exactly once at container start. Widening it needs a restart: a human action,
-against a file in git, visible in a diff.
+```bash
+printf '%s\n' ip_tables iptable_filter xt_conntrack xt_owner ipt_REJECT \
+  | sudo tee /etc/modules-load.d/devcontainer-egress.conf
+sudo systemctl restart systemd-modules-load
+```
 
-**A read-write mount breaks that asymmetry**, which is why the mount is yours to declare and why
-the feature warns when it finds one. See [The mount is yours](#the-mount-is-yours).
+A missing module does not leave half a firewall. The feature removes the chain, and the container
+starts with open egress and says so. Run `egress-status`, and read
+`/var/log/devcontainer/egress-filter.log` for the full text.
 
-There is deliberately **no command for adding a host from inside the container**. Anything the
-container's user could run to widen the allowlist would be a way for the agent to widen it too, which
-is the thing this feature exists to prevent. `egress-status` shows what is enforced and where it came
-from, and it only reads.
+**Set `localNetworks` yourself under Podman.** Podman 5 uses `pasta` by default, and `pasta` copies
+the addresses and routes of your host into the container. So `auto` reads the routing table, sees
+your LAN subnet, accepts it as private, and opens your whole home network. Name the setting instead:
 
-### Explaining a block to an agent
+```json
+"features": {
+    "ghcr.io/nshafer/devcontainer-features/egress-filter:2": { "localNetworks": "off" }
+}
+```
 
-**A blocked request explains itself, because otherwise it does not.** Measured, the failure an agent
-actually sees is a bare 403 with no mention of a filter — `curl: (56) CONNECT tunnel failed,
-response 403` — and npm goes further and blames your dependency versions. An agent that sees that
-will reasonably retry, switch registries, or start turning off certificate verification. None of
-those can work, and the last one is harmful. So three things carry the explanation:
+`slirp4netns` gives `10.0.2.0/24` and needs nothing. Under rootless Docker, the subnet is the usual
+private bridge range, and `auto` is correct.
 
-- The proxy's 403 page names the feature, the refused host and the remedy (plain HTTP, and anything
-  that surfaces the body — npm included).
-- `/usr/local/share/devcontainer/egress-filter/BLOCKED.md` says the same at length, tool-agnostic,
-  and the postAttach output points at it.
-- The same text is installed as a Claude skill at `~/.claude/skills/egress-filter/SKILL.md`, written
-  at *container start* rather than build time, because `persist-homedir` masks anything the image
-  leaves in `$HOME`.
+**Relabel the mount under SELinux.** On Fedora and RHEL, the read-only bind mount carries no SELinux
+option, so the container cannot read the global list. Relabel the folder on the host:
 
-Skills are **model-invoked**, not commands. Claude sees every skill's `name` and `description` at all
-times and loads the body when it judges one relevant. So the description is the whole trigger, and it
-is written against the *symptoms* an agent will stare at — `403`, `CONNECT tunnel failed`, an npm
-error about permissions — rather than the cause, which the agent has no way to see. Anthropic's own
-`skill-creator` notes that Claude tends to *under*-trigger skills and advises making descriptions
-"pushy". So this one is explicitly directive: read this **before** retrying, switching registry, or
-disabling certificate verification. It is discretionary even so, which is why the 403 page and
-`BLOCKED.md` carry the same information for the times it does not fire, and for agents that are not
-Claude.
+```bash
+chcon -Rt container_file_t ~/.config/egress-filter
+```
 
-For HTTPS the client only ever sees the status code, so the instructions have to arrive before the
-failure — which is what the skill is for. All of it is instructions and no capability. The agent
-still cannot widen anything, and the notes say so, including that editing the project list will not
-take effect.
+One thing to confirm on your host: the user match in the firewall is the whole control, and it must
+match the proxy user inside the user namespace. Recent kernels map the user ID through the owner of
+the network namespace, so it holds. Run `egress-status` after the first build, and read the
+`firewall` line before you trust it.
 
-### Things worth knowing
+## Limits and risks
 
-**The baseline exists because a default-deny network can hang the attach.** The VS Code server
-installs extensions from inside the container and runs as the same uid as the agent, so uid rules
-cannot separate them. Cut the marketplace off and you get a container that never finishes
-configuring. Turn `baseline` off only if you are listing those hosts yourself.
+**The filter fails open.** If the firewall cannot be applied, the feature removes the chain, and the
+container starts with open network access. It writes a warning to the log, and `egress-status` shows
+it. A container that does not start is worse than a container that starts and says that it is open.
+So check `egress-status` after a rebuild.
 
-**DNS is allowed by default and is a side channel.** Names still resolve, so an agent can encode data
-into queries. `allowDns: false` closes it — the proxy resolves server-side, so allowed hosts keep
-working — at the cost of anything that resolves for itself: git, package managers, most clients.
+**`sudo` removes the filter.** A remote user with `sudo` runs `iptables -F`. Use
+[`sandbox`](../sandbox) with the default `sudoMode` of `drop`. If you use `"sudoMode":
+"restricted"`, do not allow a firewall tool in `sudoCommands`. The check in that feature rejects one
+for this reason.
 
-**Only HTTP and HTTPS get out.** Anything else — `git+ssh`, arbitrary TCP — is rejected outright.
-This is correct for a default-deny posture, and surprising the first time. Peers on the container's
-own docker network are the exception: see `localNetworks` above.
+**Every allowed host is a place where data can go.** The filter stops an agent from reaching a
+random server. It does not stop an agent from pushing your code to a repository on a host that you
+allowed, such as `github.com`. Keep the lists small.
 
-**`NET_ADMIN` is unconditional**, because `capAdd` is static metadata like everything else here.
-That is why this is a separate feature rather than an option on `sandbox`. Only projects that ask for
-egress filtering get the capability.
+**The filter reads host names, not content.** An allowed host is allowed for every path and every
+request. The proxy does not open your HTTPS traffic.
+
+**DNS is a side channel.** With `allowDns` on, which is the default, names still resolve, so a
+program can put data into the names that it asks for. `allowDns: false` closes that channel,
+because the proxy resolves names itself for the allowed hosts. The cost is that anything which
+resolves names for itself stops working: git, package managers and most clients.
+
+**Only HTTP and HTTPS get out.** Everything else, such as `git+ssh` or any other TCP connection, is
+rejected. Peers on the local subnets are the exception. See
+[Other containers on the same network](#other-containers-on-the-same-network).
+
+**The local subnets are open.** See the relaxation in
+[Other containers on the same network](#other-containers-on-the-same-network).
+
+**The image build is not filtered.** The proxy and the firewall start when the container starts. A
+`RUN` line in your Dockerfile, and the install script of every feature, run before that with full
+network access.
+
+**There is a short window while the firewall is applied again.** The feature empties each chain
+before it fills it, so the `OUTPUT` chain is empty for about a millisecond, and its policy is
+`ACCEPT`. This happens at container start, and again on each `docker network create` or
+`docker compose up` when an inner Docker daemon is installed. It needs a program that is already
+running and already waiting for the window.
+
+**The `NET_ADMIN` capability is always added.** A feature cannot add a capability for some option
+values only. That is why this is a separate feature, and not an option on `sandbox`: only the
+projects that ask for the filter get the capability.
+
+**The baseline hosts keep VS Code working.** The VS Code server installs extensions from inside the
+container, and it runs as the same user as the agent, so a user rule cannot separate them. Without
+the baseline, the container never finishes configuring. Turn `baseline` off only if you list those
+hosts yourself.
 
 
 ---

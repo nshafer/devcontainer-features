@@ -1,102 +1,101 @@
 # A request was blocked by egress-filter
 
-This container has default-deny outbound networking. Everything is refused except hosts on an
-allowlist, and the refusal happens at the firewall, so it is not something the failing tool can be
-configured around.
+This container blocks all outbound network traffic, except to the hosts on an allowlist. A firewall
+in the container does the blocking. No setting in the failing tool can change it.
 
-## Recognizing it
+## How to recognize it
 
-The error is almost always a bare 403 from the proxy, and most tools describe it badly:
+The error is almost always a bare 403 from the proxy. Most tools describe it badly:
 
-| tool | what you see |
-| --- | --- |
-| `curl` (https) | `curl: (56) CONNECT tunnel failed, response 403` |
-| `curl` (http) | an HTML page titled *Blocked by egress-filter* |
-| `git` | `fatal: unable to access '...': CONNECT tunnel failed, response 403` |
-| `npm` | `npm error 403 Forbidden`, followed by advice about forbidden package versions |
-| `dig @8.8.8.8`, `nslookup ... 1.1.1.1` | a timeout, or `connection refused` |
+| Tool                            | What you see                                                    |
+| ------------------------------- | --------------------------------------------------------------- |
+| `curl` (https)                  | `curl: (56) CONNECT tunnel failed, response 403`                |
+| `curl` (http)                   | An HTML page with the title *Blocked by egress-filter*          |
+| `git`                           | `fatal: unable to access '...': CONNECT tunnel failed, response 403` |
+| `npm`                           | `npm error 403 Forbidden`, then advice about package versions   |
+| `dig @8.8.8.8`, `nslookup ... 1.1.1.1` | A timeout, or `connection refused`                      |
 
-DNS is its own case. Names still resolve, but only through the resolvers in `/etc/resolv.conf`:
-port 53 to any other address is refused at the firewall, so pointing a lookup at a public resolver
-fails even though ordinary resolution works. `egress-status` prints the resolvers that are allowed.
+DNS is a special case. Names still resolve, but only through the servers in `/etc/resolv.conf`. The
+firewall refuses port 53 to any other address. So a lookup against a public resolver fails, even
+though normal name resolution works. `egress-status` prints the servers that are allowed.
 
-npm's message is misleading: it is not a version problem, a registry problem, or a credentials
-problem. If a request fails with 403 and you did not expect an authorisation error, run
-`egress-status` before doing anything else.
+The message from npm is misleading. It is not a problem with a version, a registry or a credential.
+If a request fails with a 403 and you did not expect an authorization error, run `egress-status`
+first.
 
-## What is *not* blocked
+## What is not blocked
 
-Other containers on this container's own docker network — a `docker-compose` database on 5432, a
-cache on 6379 — are reachable directly. The firewall allows the subnets this container is attached
-to. `egress-status` prints them on the `local` line. So a connection that fails to a service like
-that is an ordinary problem — the service is not up, the port is wrong, the name does not resolve —
-and not this filter.
+You can reach the other containers on the Docker network of this container. A Docker Compose
+database on 5432, or a cache on 6379, is an example. The firewall allows the subnets of this
+container, and `egress-status` prints them on the `local` line. So a failed
+connection to such a service is an ordinary problem: the service is down, the port is wrong, or the
+name does not resolve.
 
-One exception, for HTTP to such a service: a client that reads `HTTP_PROXY` sends the request to the
-proxy, which denies it. The fix belongs in the feature's `noProxy` option and needs a restart, so
-report it the same way as a blocked host.
+There is one exception. For HTTP to such a service, a client that reads `HTTP_PROXY` sends the
+request to the proxy, which denies it. The fix belongs in the `noProxy` option of the feature, and
+it needs a container restart. Report it in the same way as a blocked host.
 
-## Containers you start yourself
+## Containers that you start
 
-If this container runs a Docker daemon, the same allowlist covers every container you start with it,
-and the daemon's own image pulls. A build that fetches an unlisted host fails inside the container.
-The error there mentions no proxy at all:
+If this container runs a Docker daemon, the same allowlist covers the image pulls of the daemon and
+every container that you start. A build that fetches a host outside the list fails inside
+the container. That error names no proxy at all:
 
-| what you run | what you see |
-| --- | --- |
-| `docker pull` | a registry timeout, or `failed to resolve reference` |
-| `RUN apt-get update` in a build | `Could not connect` on every mirror |
-| `docker run ... curl https://...` | `Connection refused`, or a 403 from the proxy |
+| What you run                       | What you see                                       |
+| ---------------------------------- | -------------------------------------------------- |
+| `docker pull`                      | A registry timeout, or `failed to resolve reference` |
+| `RUN apt-get update` in a build    | `Could not connect` for every mirror               |
+| `docker run ... curl https://...`  | `Connection refused`, or a 403 from the proxy      |
 
-`egress-status` prints a `docker` line when this applies. Treat it exactly like any other block:
-`egress-denied` still lists every refusal, and a person still has to allow the host.
+`egress-status` prints a `docker` line when this applies. Treat it like any other block.
+`egress-denied` lists every refusal, and a person still has to allow the host.
 
-Two moves look like fixes and are not. `--network host` puts the container in this container's own
-namespace, where the same firewall rejects it. `docker run -e HTTP_PROXY=` drops the polite route
-out, and the firewall then refuses the direct one.
+Two moves look like a fix and are not. `--network host` puts the container in the network namespace
+of this container, where the same firewall rejects it. `docker run -e HTTP_PROXY=` removes the
+polite route out, and the firewall then refuses the direct one.
 
 ## What will not work
 
-There is deliberately no command in this container that adds a host to the allowlist. If there
-were, anything running in here could widen its own network access, which is the thing this feature
-exists to prevent. Specifically, none of these will help:
+There is deliberately no command in this container that adds a host to the allowlist. With such a
+command, anything in here could widen its own network access, which is what this feature exists to
+prevent. These do not help:
 
-- retrying, or waiting and retrying
-- a different mirror, registry, proxy or CDN
-- `npm config set strict-ssl false`, `GIT_SSL_NO_VERIFY`, `curl -k` — the block is not a TLS
-  failure, and turning off certificate checking makes things worse for no gain
-- querying a different nameserver — `dig @1.1.1.1`, setting `DNS_SERVER`, editing
-  `/etc/resolv.conf` — the firewall pins port 53 to the resolvers this container was given, and
-  a name resolving does not mean the host behind it is reachable anyway
-- editing `.devcontainer/egress-allow.txt` yourself — it is read once at container start and is not
-  re-read while the container runs, so this changes nothing until someone restarts it
+- A retry, or a wait and a retry.
+- Another mirror, registry, proxy or CDN.
+- `npm config set strict-ssl false`, `GIT_SSL_NO_VERIFY` or `curl -k`. The block is not a TLS
+  failure. Turning off certificate checks makes things worse and gains nothing.
+- Another nameserver: `dig @1.1.1.1`, a `DNS_SERVER` variable, or an edit of `/etc/resolv.conf`.
+  The firewall pins port 53 to the servers of this container. A name that resolves does
+  not mean that the host behind it is reachable.
+- An edit of `.devcontainer/egress-allow.txt`. That file is read once at container start. It
+  changes nothing until someone restarts the container.
 
 ## What to do instead
 
-Ask the person you are working with to allow the host, and tell them which one and why. There are
-two lists, and the difference matters:
+Ask the person you are working with to allow the host. Name the host, the tool and your goal. There
+are two lists, and the difference matters:
 
-| list | where | scope | takes effect |
-| --- | --- | --- | --- |
-| global | `~/.config/egress-filter/allowlist.txt` **on their machine** | every container | within ~2s, no restart |
-| project | `.devcontainer/egress-allow.txt` **in this repo** | this project | after a container restart |
+| List    | Where                                                        | Scope           | Takes effect              |
+| ------- | ------------------------------------------------------------ | --------------- | ------------------------- |
+| global  | `~/.config/egress-filter/allowlist.txt` **on their machine** | Every container | within ~2s, no restart    |
+| project | `.devcontainer/egress-allow.txt` **in this repository**      | This project    | After a container restart |
 
-A bare name allows that host exactly (`example.com`). A leading dot allows the domain and its
-subdomains (`.github.com`). One per line.
+A bare name allows that host only: `example.com`. A leading dot also allows the subdomains:
+`.github.com`. One for each line.
 
-A good request names the host, the tool, and what you were trying to do:
+A good request looks like this:
 
-> I need `registry.npmjs.org` allowed to install dependencies — `npm ci` is failing with a 403 from
-> the egress filter. Adding `registry.npmjs.org` to `~/.config/egress-filter/allowlist.txt` applies
-> immediately; putting it in `.devcontainer/egress-allow.txt` needs a container restart.
+> I need `registry.npmjs.org` allowed, so that I can install the dependencies. `npm ci` fails with
+> a 403 from the egress filter. In `~/.config/egress-filter/allowlist.txt` the host applies
+> immediately. In `.devcontainer/egress-allow.txt` it needs a container restart.
 
-## Working out what to ask for
+## How to work out what to ask for
 
-`egress-denied` lists every host this container asked for and was refused, with a count. That is the
-list to hand over -- it is what the build actually needed, rather than a guess. It reads only and
-needs no privileges.
+`egress-denied` lists every host that this container asked for and did not reach, with a count.
+Hand that list over. It is what the build needed, and not a guess. It reads only and needs no
+privileges.
 
-## Checking what is allowed
+## How to check what is allowed
 
-`egress-status` prints the active policy and every file it was merged from. It only reads, so it is
+`egress-status` prints the active policy and every file that it came from. It reads only, so it is
 always safe to run.

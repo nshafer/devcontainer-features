@@ -1,10 +1,19 @@
-## Host setup
+## Install
 
-This feature mounts nothing from the host, so there is no path to create. But a feature cannot open a
-port, and it cannot read the host's project path. So the project has to add two lines, and the host
-has to set one variable.
+[Tidewave](https://tidewave.ai) is an app that runs on your host. It connects to the Tidewave CLI,
+which runs next to your project. This feature installs the CLI in the container and starts it.
 
-In the project's `devcontainer.json`:
+A feature cannot publish a port or read environment variables of the host. So you must add three
+things yourself.
+
+### 1. Set `TIDEWAVE_HOST_PATH` on the host
+
+Set it to the path of your project on the host, in the environment that starts VS Code. The CLI uses
+this path when it opens a file in your editor. Without it, the CLI gives your editor paths from
+inside the container, and the editor cannot open them. I suggest tools that can set environment
+variables in your project directory, such as `mise` or `direnv`.
+
+### 2. Add the feature, the port and the variable to `devcontainer.json`
 
 ```jsonc
 "features": {
@@ -14,85 +23,82 @@ In the project's `devcontainer.json`:
 "remoteEnv": { "TIDEWAVE_HOST_PATH": "${localEnv:TIDEWAVE_HOST_PATH}" }
 ```
 
-On the host, set `TIDEWAVE_HOST_PATH` to the project path the host editor uses. The feature says so
-in the creation log when the variable is missing. Without it, the app hands the host editor container
-paths it cannot open.
+If you change the `port` option, change both numbers in `appPort` to the same value.
 
-## Notes
+### 3. Rebuild the container
 
-The feature runs the [Tidewave](https://tidewave.ai) CLI inside the container, so the Tidewave app on
-the host can drive the project. Two halves. The feature downloads the binary at **image build time**
-to `/usr/local/bin/tidewave`. A `postStartCommand` starts it on every container start.
+The creation log shows `tidewave: listening on 9000`. The Tidewave app on the host can then
+connect to port 9000.
 
-| Option              | Default  | |
-| ------------------- | -------- | --- |
-| `version`           | `latest` | Or an exact `X.Y.Z` matching a `tidewave_app` release tag. A tag that does not exist fails the build. |
-| `port`              | `9000`   | |
-| `allowRemoteAccess` | `true`   | |
-| `debug`             | `false`  | On passes `--debug`, so the CLI logs what it does to `/tmp/tidewave.log`. |
-| `autostart`         | `true`   | Off installs the binary and starts nothing. |
+## Port rules
 
-**The published port has to be the same number on both sides.** `9000:9000`, never `9411:9000`. The
-CLI checks the `Origin` header and rejects one that names a port other than its own. This is
-measured, and it is the reason the upstream containers guide says the app must be reachable "using
-the same host and port inside and outside the container".
+**Use the same port number on the host and in the container.** Write `9000:9000`, not `9411:9000`.
+The CLI reads the `Origin` header of each request. It refuses a request that names a different port.
 
-**`allowRemoteAccess` defaults on because nothing works without it.** Left off, the CLI binds
-`127.0.0.1` only, and a published port cannot reach that: Docker forwards to the bridge address of
-the container, not to its loopback. The upstream devcontainer snippet omits the flag, and a container
-built from it has a port nobody can connect to. Binding `0.0.0.0` is less alarming than it reads. The
-`Origin` check above still stands, so a request from anywhere but a `localhost` origin gets a 403,
-and `appPort` binding `127.0.0.1` keeps the port off the other interfaces of the machine.
+**Keep `allowRemoteAccess` on.** Docker sends a published port to the network address of the
+container, not to `127.0.0.1` in the container. With the option off, the CLI listens on
+`127.0.0.1` only, and nothing on the host can connect.
 
-**The libc build is detected, not chosen** — glibc unless the image is genuinely musl. The CLI binary
-itself would not care: the musl asset is statically linked and runs fine on Debian. What cares is the
-**Bun runtime the CLI downloads at first use** into `~/.cache/tidewave/downloads`. The CLI picks
-which Bun to fetch from its own build triple, which it reports verbatim from `POST /about` with no
-idea what the host libc actually is. So a musl CLI on Debian fetches `bun-linux-x64-musl`, and the
-image has no loader for it:
+**Keep `127.0.0.1:` at the start of `appPort`.** It publishes the port on the loopback address of
+your host only. Without it, other computers on your network can connect to the port.
 
-```
-sh: 1: /home/node/.cache/tidewave/downloads/bun-linux-x64-musl-1-3-10: not found
-```
+## How it works
 
-Detection is `ldd --version` naming musl, or the `/lib/ld-musl-<arch>.so.1` loader existing for
-images with no `ldd`. Everything else gets gnu. Tests cover both branches. The default suite asserts
-a gnu asset and a gnu target on `node`, and the `musl_image` scenario asserts a musl one on
-`devcontainers/base:alpine`.
+### At build time
 
-Switching an existing container between the two is self-healing, because the two Bun builds have
-different filenames. The feature leaves the stale one in the cache and downloads a correct one beside
-it. It is only wasted bytes, but it does survive a rebuild when `persist-homedir` is in play.
+1. The feature finds the CPU type (`x86_64` or `aarch64`) and the C library of the image (glibc or
+   musl).
+2. It downloads the matching CLI from the `tidewave_app` GitHub releases to
+   `/usr/local/bin/tidewave`. A version that does not exist stops the build.
+3. It writes the option values to `/usr/local/share/devcontainer/tidewave/config`.
 
-**Temp files go under the home directory, not `/tmp`.** The `postStart` script exports `TMPDIR` as
-`$HOME/.cache/tidewave/tmp`. The CLI takes no flag for a temp directory, so the environment variable
-is the whole mechanism, and it reaches the processes the CLI spawns as well.
+The C library matters because of the Bun runtime. The CLI downloads Bun the first time it runs,
+and it picks the Bun build that matches its own build. A musl CLI on a glibc image downloads a Bun
+that cannot run there. So the feature installs the musl CLI only on a musl image, such as Alpine.
 
-The placement is the point. `~/.cache/tidewave` is already where the CLI keeps the Bun runtime it
-downloads, and the `persist-homedir` feature puts the whole of `/home` on a volume. Add that feature
-and the pair survives a rebuild. Leave it out and neither does, which is where a container without
-any of this starts. Nothing here mounts anything, so a project pays nothing for the arrangement.
+### At each container start
 
-The script probes the directory rather than trusting it. If the directory cannot be made, or cannot
-be written, the script says so and leaves `TMPDIR` alone. A lost cache is a cost. A bridge that never
-came up is a fault. The temp directory it settled on is stamped into `/tmp/tidewave.log` beside the
-command, so the log says which one a run actually used.
+1. If a Tidewave CLI already answers on the port, the script stops.
+2. The script sets `TMPDIR` to `~/.cache/tidewave/tmp`. If it cannot write there, it keeps the
+   default.
+3. It starts the CLI in the background, as the remote user, in the workspace folder. The CLI serves
+   the folder that it starts in.
+4. It waits up to 10 seconds for the CLI to answer, and writes the result to the log.
 
-**`TMPDIR` does not move the Bun download.** The string does not appear in the CLI binary at all. The
-CLI reports its own `cache_dir` from `POST /about`, and it is `$XDG_CACHE_HOME/tidewave`, or
-`~/.cache/tidewave` when that variable is unset. Putting the temp directory beside it is a placement
-and not a redirection.
+The script never stops the container from starting. If the CLI does not start, the creation log
+shows an error and the contents of the log file.
 
-The feature uses `postStart` rather than `postCreate`, because the process dies with the container
-and has to come back with it. It runs on every start, so it first probes `POST /about` and leaves an
-instance that already answers alone.
+## Files and logs
 
-The CLI takes no project path and has no flag for one. It serves its working directory, which for a
-lifecycle hook is the workspace folder. That is also why this is not the `entrypoint` of the feature.
-An entrypoint runs as root, from `/`, before the workspace matters.
+| Path                                             | What it holds                                              |
+| ------------------------------------------------ | ---------------------------------------------------------- |
+| `/tmp/tidewave.log`                              | The start command and time. The CLI output. Cleared at each start. |
+| `~/.cache/tidewave/downloads`                    | The Bun runtime that the CLI downloads.                    |
+| `~/.cache/tidewave/tmp`                          | Temporary files of the CLI.                                |
+| `/usr/local/share/devcontainer/tidewave/config`  | The options, fixed at build time.                          |
 
-Startup goes to `/tmp/tidewave.log`, stamped with the command and time, because the CLI itself is
-silent on a healthy run. Turn `debug` on to make it talk: the CLI then writes what it does to the
-same file. The flag is baked in at build time, so a change to it needs a rebuild, and the log is
-truncated on each start. Nothing in the start script exits non-zero. A bridge that failed to come up
-is worth a loud line in the creation log, not worth failing the container over.
+The CLI writes nothing to the log when it works. Set `debug` to `true` to log what it does.
+
+With [`persist-homedir`](../persist-homedir), the Bun download and the temporary files stay after a
+rebuild.
+
+## What it does not do
+
+- It does not publish the port. Add `appPort` yourself.
+- It does not apply option changes to a running container. Rebuild the container after you change
+  an option.
+- It does not restart the CLI if the CLI stops. Restart the container, or run `tidewave` yourself
+  with the flags in the config file.
+- It does not delete an old Bun download. If you change the image between glibc and musl, the old
+  download stays in the cache.
+
+## Risks
+
+- **The Tidewave app gets access to your project through the CLI.** Anything that can connect to the
+  port can use the same access.
+- **The `Origin` check stops web pages, not programs.** A web page from another site cannot use the
+  CLI. A program on your host can send any `Origin` header, so it can connect.
+- **Without `127.0.0.1:` in `appPort`, the port is open to your network.**
+- **The first run needs network access.** The CLI downloads Bun. With
+  [`egress-filter`](../egress-filter), enable the `tidewave` preset or run `egress-denied` to see
+  which hosts to allow.

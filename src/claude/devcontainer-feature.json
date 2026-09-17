@@ -2,7 +2,7 @@
   "id": "claude",
   "version": "1.1.1",
   "name": "Claude Code (nshafer)",
-  "description": "Installs the Claude Code CLI with the native installer.",
+  "description": "Installs the Claude Code CLI when the image builds.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/claude",
   "options": {
     "version": {
@@ -12,7 +12,7 @@
         "stable",
         "latest"
       ],
-      "description": "Version to install: 'stable', 'latest', or an exact X.Y.Z."
+      "description": "The version to install: 'stable', 'latest', or an exact X.Y.Z."
     }
   },
   "customizations": {

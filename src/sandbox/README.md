@@ -1,7 +1,7 @@
 
 # Sandbox (nshafer) (sandbox)
 
-Seals the host sockets VS Code forwards into a dev container - SSH agent, GPG agent, X11 and the Dev Containers extension IPC - and takes away the remote user's blanket sudo grant so the seals cannot simply be undone. Mitigation, not a boundary: the socket must exist for the container to attach, so there is a short window at each attach. See the README.
+Blocks the host channels that VS Code forwards into a dev container: the SSH agent, the GPG agent, the X11 display, the git credentials and the Dev Containers extension socket. Also removes sudo from the remote user, so a program in the container cannot open the channels again. This is a mitigation, not a security boundary.
 
 ## Example Usage
 
@@ -15,403 +15,96 @@ Seals the host sockets VS Code forwards into a dev container - SSH agent, GPG ag
 
 | Options Id | Description | Type | Default Value |
 |-----|-----|-----|-----|
-| blockSshAgent | Block the forwarded SSH agent (/tmp/vscode-ssh-auth-*.sock). Your host SSH keys stop being usable from inside, so git over SSH stops working there. | boolean | true |
-| blockGpgAgent | Block the forwarded GPG agent (~/.gnupg/S.gpg-agent, .extra and S.keyboxd), by sealing the sockets just after VS Code creates them. Signed commits stop working inside the container. | boolean | true |
-| blockX11 | Block the forwarded display (/tmp/.X11-unix/X*). The socket is sealed just after VS Code creates it, not pre-empted -- pre-empting it stops the container attaching at all. GUI apps stop reaching your desktop. Wayland cannot be blocked from inside - see the README. | boolean | true |
-| blockCodeCli | Block the 'code' CLI channel (vscode-ipc-*.sock). Off by default because sealing it stops the container attaching: the VS Code server unlinks that path when it disposes the hook, a root-owned tombstone makes that throw EPERM, and the window sits on 'Configuring Dev Container' for good. What it grants while open: a local VS Code window on any host path (an open request with a vscode-local: URI), extension installs into the container, and 'code --openExternal <uri>', which hands a URI to your host. The host drops file: URIs, asks before it opens http and https, and opens every other scheme with its registered app and no prompt. Turn it on only if you accept the attach failure. | boolean | false |
-| blockGitAskpass | Block the git credential channel (vscode-git-*.sock, reached through GIT_ASKPASS). On by default, together with blockExtensionIpc, so no host credential is reachable from the container. The cost is real: git push, pull and fetch over HTTPS stop working, in the VS Code UI and in the terminal. Authenticate some other way - 'gh auth login' inside the container, or a token in the container's own credential store. Set it to false to get the host token back. | boolean | true |
-| blockExtensionIpc | Block the Dev Containers extension channel (vscode-remote-containers-ipc-*.sock). An HTTP POST on it calls rpc on the extension running on your host, and git uses it as credential.helper - so it answers for every host in your host's credential store, with no prompt. Blocking it costs the host credential helper and host docker registry logins. blockGitAskpass seals the other credential path, so both are shut by default and a push over HTTPS needs a credential of its own. | boolean | true |
-| scrubEnv | Also unset the variables that advertise the blocked sockets (SSH_AUTH_SOCK, DISPLAY, GIT_ASKPASS, BROWSER, VSCODE_IPC_HOOK_CLI, REMOTE_CONTAINERS_*) in every shell. Only for the channels that are actually blocked - unsetting the variable for an open channel would break it. Cosmetic next to the socket blocks, since VS Code re-injects them, but it stops tools finding the paths by accident. | boolean | true |
-| sweepInterval | Seconds between backstop sweeps. Sealing is normally driven by inotify, within about a millisecond of a socket appearing; this poll only catches what inotify missed, so it rarely needs changing. | string | 1 |
-| sudoMode | What happens to the remote user's sudo grant. 'drop' removes it and everything that could restore it - the default, and the only mode where every seal in this feature holds. 'restricted' removes the blanket grant and replaces it with the linted allowlist in sudoCommands. 'keep' changes nothing, which makes this whole feature decoration. Named sudoMode and not sudo because a feature option becomes an image environment variable, and a container-wide SUDO=drop breaks the common '$SUDO apt-get install' idiom. | string | drop |
-| sudoCommands | Commands the remote user may run as root when sudoMode is restricted, comma separated, each an absolute path with its arguments pinned: '/bin/systemctl restart myapp,/usr/sbin/nginx -s reload'. Every entry is linted at build time and the build fails on a route back to full root - a shell, an interpreter, a wildcard, an unpinned package manager, a firewall tool, a user-writable binary. This list becomes the trust boundary of the feature. See the README. | string | - |
-| sudoAllowUnsafe | Install the sudoCommands allowlist even when the lint rejects an entry. Off by default, and the build fails instead. Turn it on only after you have read each finding and decided it is wrong or acceptable - the findings are routes from an allowed command back to full root, not style notes. | boolean | false |
+| blockSshAgent | Block the forwarded SSH agent (/tmp/vscode-ssh-auth-*.sock). Git over SSH with your host keys then fails in the container. | boolean | true |
+| blockGpgAgent | Block the forwarded GPG agent (~/.gnupg/S.gpg-agent, .extra and S.keyboxd). Signed commits with your host keys then fail in the container. | boolean | true |
+| blockX11 | Block the forwarded X11 display (/tmp/.X11-unix/X*). GUI apps in the container then cannot open a window on your desktop. Wayland cannot be blocked from inside the container. Read the README. | boolean | true |
+| blockCodeCli | Block the 'code' CLI socket (vscode-ipc-*.sock). Off by default, because a block on this socket stops the container from attaching: the VS Code server deletes the path when it shuts the channel down, and a file that root owns makes the delete fail. While the channel is open, a program in the container can open a VS Code window on any host path, install extensions, and give a URI to an app on your host. Turn it on only if you accept that the container does not attach. | boolean | false |
+| blockGitAskpass | Block the git credential socket (vscode-git-*.sock, reached through GIT_ASKPASS). On by default, together with blockExtensionIpc, so no host credential is reachable from the container. Git push, pull and fetch over HTTPS then fail, in the VS Code interface and in the terminal. Run 'gh auth login' in the container to get a login of its own. Set this to false to use the token of your host instead. | boolean | true |
+| blockExtensionIpc | Block the Dev Containers extension socket (vscode-remote-containers-ipc-*.sock). The socket answers for every host in the credential store of your host, with no prompt, and git uses it as credential.helper. A block also costs your host Docker registry logins. | boolean | true |
+| scrubEnv | Unset the variables that name the blocked sockets (SSH_AUTH_SOCK, DISPLAY, GIT_ASKPASS, BROWSER, VSCODE_IPC_HOOK_CLI, REMOTE_CONTAINERS_*) in every shell. Only for the channels that are blocked. This is not a control, because VS Code sets them again, but it stops a tool from finding a path by accident. | boolean | true |
+| sweepInterval | Seconds between the backup scans for new sockets. inotify seals a socket about a millisecond after it appears, so this poll catches only what inotify missed. | string | 1 |
+| sudoMode | What happens to the sudo grant of the remote user. 'drop' removes it, and removes everything that could restore it. This is the default, and the only mode where every block holds. 'restricted' removes the blanket grant and installs the checked list in sudoCommands. 'keep' changes nothing, which leaves this feature with nothing to protect. The name is sudoMode and not sudo, because a feature option becomes an environment variable in the image, and SUDO=drop would break the common '$SUDO apt-get install' pattern. | string | drop |
+| sudoCommands | The commands that the remote user can run as root when sudoMode is 'restricted', comma separated. Each one needs an absolute path and exact arguments: '/bin/systemctl restart myapp,/usr/sbin/nginx -s reload'. The build checks each entry and fails on a route back to full root, such as a shell, an interpreter, a wildcard, a package manager with no arguments, a firewall tool, or a program that the remote user can write. This list becomes the trust boundary of the feature. Read the README. | string | - |
+| sudoAllowUnsafe | Install the sudoCommands list even when the check rejects an entry. Off by default, and the build fails instead. Turn it on only after you read each finding and decided that it is acceptable. | boolean | false |
 
-## Upgrading from 2.x
+## The problem this feature solves
 
-`blockGitAskpass` now defaults to `true`. In 2.x it shipped open, so a push from the editor
-authenticated with your host's GitHub token. Both credential channels are sealed in 3.0, so
-**`git push`, `pull` and `fetch` over HTTPS stop working** until the container has a credential of
-its own:
+When VS Code opens a dev container, it forwards a set of host channels into it. Each channel is a
+Unix socket inside the container that connects to a program on your host. They are useful:
 
-- `gh auth login` inside the container, which writes a token to the container's own store.
-- Or a token in the container's git credential store, by whatever route you already use.
-- Or `"blockGitAskpass": false`, which puts 2.x behaviour back and the host token with it.
+- `git push` over SSH uses the SSH keys on your host.
+- A signed commit uses the GPG keys on your host.
+- `git push` over HTTPS uses the GitHub login on your host.
+- A GUI app in the container opens a window on your desktop.
 
-Nothing else changed. Every other default, option name and script path is the same as 2.0.0.
+The problem is that every program in the container can use these channels. A coding agent in the
+container can sign a commit with your key, push to any repository that your host token can reach,
+read your screen, or ask the VS Code extension on your host for a credential.
 
-## Upgrading from 1.x
+This feature closes those channels, and it removes `sudo` from the remote user, so a program in the
+container cannot open them again.
 
-`blockVscodeIpc` is gone. It covered three sockets that are not equivalent, and one of those
-sockets cannot be sealed without stopping the container from attaching. Three options replace it:
+> **Caution:** This feature is a mitigation, not a security boundary. There is a short time at each
+> attach when a channel is open. Read [Limits](#limits) before you trust it.
 
-| Was | Is now | Default |
-| --- | --- | --- |
-| `blockVscodeIpc` → `vscode-ipc-*.sock` | `blockCodeCli` | `false` |
-| `blockVscodeIpc` → `vscode-git-*.sock` | `blockGitAskpass` | `true` |
-| `blockVscodeIpc` → `vscode-remote-containers-ipc-*.sock` | `blockExtensionIpc` | `true` |
+## What stops working
 
-The CLI warns about an option it does not know, so a `devcontainer.json` that still sets
-`blockVscodeIpc` builds and gets the new defaults. To keep 1.x behaviour exactly, set all three to
-`true` — and read the section on `vscode-ipc-*.sock` below first, because that is the setting that
-hangs the attach.
+These are the defaults. Each one has an option, and [Channels](#channels) lists them.
 
-## Host setup
+| What                                    | How to work without it                                    |
+| --------------------------------------- | --------------------------------------------------------- |
+| `git push`, `pull`, `fetch` over HTTPS  | Run `gh auth login` in the container.                     |
+| `git push`, `pull`, `fetch` over SSH    | Use an HTTPS remote, or an SSH key in the container.       |
+| Signed commits with your host keys      | Commit in the container, then sign on the host.           |
+| GUI apps on your desktop                | Run the app on the host.                                  |
+| `docker pull` with your host registry login | Log in to the registry in the container.              |
+| `sudo`                                  | Install tools in the image. Or see [sudo modes](#sudo-modes). |
 
-None on the filesystem. This feature mounts nothing from the host, so you create no path before the
-first build.
+The `code` command still works, because `blockCodeCli` is off by default. Read
+[The `code` CLI channel](#the-code-cli-channel) for what that channel gives away.
 
-But the feature is mitigation, not a boundary (see below), and the fixes that fully close the
-forwarded channels are host-side. Set these on any machine that runs an agent in the container:
+## Install
 
-- Unset `SSH_AUTH_SOCK` and `DISPLAY` in the environment that starts VS Code. Nothing is forwarded,
-  so there is nothing to race.
-- Turn off the Wayland mount in VS Code user settings:
+### 1. Add the feature to your project
 
-  ```jsonc
-  "dev.containers.mountWaylandSocket": false
-  ```
-
-- Run the agent as a different Unix user than the remote user, if you can. A second user cannot
-  connect to a forwarded socket at all.
-- Keep the source in a container volume, not a bind mount, or do not run host tools in the
-  bind-mounted folder while an agent works. The container can write `.git/config` and
-  `.devcontainer/`, and host tools run what those files name. See
-  [The real risk: the workspace bind mount](#the-real-risk-the-workspace-bind-mount).
-
-The feature takes away the remote user's blanket sudo grant, which closes the hole that matters: a
-remote user who regains root undoes every seal. Add `no-new-privileges` yourself as a second lock —
-the feature does not set it, because it cannot be conditional and it breaks restricted sudo. See
-the sudo section below.
-
-## Rootless Docker and Podman
-
-The seals hold. Every one of them is a `chown root` and a `chmod 000` **inside** the container, and
-inside a rootless container root is still root — it owns the user namespace the container runs in.
-The sudo drop holds for the same reason. Nothing in this feature asks the host for a capability.
-
-What changes is the reason to use it, and the change is smaller than it looks. Under a rootless
-runtime, a process that breaks out of the container lands on your unprivileged host account rather
-than on host root. That closes one path and leaves this feature's path open: VS Code still forwards
-your SSH agent, your GPG agent, your display and your GitHub token into the container, and those
-sockets answer to anything inside it. A rootless runtime does not make a forwarded credential any
-less forwarded. Read [what this actually buys you](#what-this-actually-buys-you--read-this-first)
-again with that in mind — the numbers there do not move.
-
-Two things to check on your own host:
-
-- **The `userns` flag.** Podman with `--userns=keep-id` maps your host uid into the container and
-  renumbers everything else. The seals assume a mapped root. Build one container with the exact
-  flag you plan to use, then read `/var/log/devcontainer/sandbox.log` and confirm each block
-  reports success.
-- **SELinux.** On Fedora and RHEL, a socket VS Code forwards through a bind mount is already
-  labelled by the runtime. This feature leaves a bind mount alone rather than sealing it, and says
-  so in the log, so SELinux changes what the report says and not what the feature does.
-
-## What this feature does
-
-VS Code's Dev Containers extension forwards a set of host sockets into every container it starts.
-Each socket is a capability that an agent in the container inherits. This is measured from a live
-container, not assumed. The extension writes the list into `REMOTE_CONTAINERS_SOCKETS` itself:
-
-| Channel | Path | Option | Default | What it grants |
-| --- | --- | --- | --- | --- |
-| SSH agent | `/tmp/vscode-ssh-auth-<uuid>.sock` | `blockSshAgent` | blocked | signing with your host SSH keys |
-| GPG agent | `~/.gnupg/S.gpg-agent` | `blockGpgAgent` | blocked | signing with your host GPG keys |
-| GPG keyboxd | `~/.gnupg/S.keyboxd` | `blockGpgAgent` | blocked | your keyring |
-| X11 | `/tmp/.X11-unix/X<n>` | `blockX11` | blocked | your desktop: keystrokes, screenshots |
-| extension IPC | `vscode-remote-containers-ipc-<uuid>.sock` | `blockExtensionIpc` | blocked | RPC to the extension on your host, including every credential your host stores |
-| git credentials | `$XDG_RUNTIME_DIR/vscode-git-<id>.sock` | `blockGitAskpass` | blocked | your GitHub token, via `GIT_ASKPASS` |
-| `code` CLI | `vscode-ipc-<uuid>.sock` | `blockCodeCli` | **open** | a local VS Code window on any host path, and a URI opened by an app on your host |
-| Wayland | `/tmp/vscode-wayland-<uuid>.sock` | none | open | your desktop — **a bind mount**, see below |
-
-This feature seals those sockets and removes the remote user's sudo grant, so the seals hold. One
-of them ships open, and the section on `vscode-ipc-*.sock` says why: the reason is about what VS
-Code needs to attach at all, not about what the channel costs you.
-
-### The three IPC channels are not one channel
-
-They used to share an option, `blockVscodeIpc`. They are not equivalent. Measured from the
-container server's own source, `/tmp/vscode-remote-containers-server-<uuid>.js`, and from the
-server CLI in `~/.vscode-server/bin/<commit>/out/server-cli.js`:
-
-| Socket | Reaches the host? | What it grants | What blocking it breaks |
-| --- | --- | --- | --- |
-| `vscode-ipc-*.sock` | yes, through the editor UI | four message types — `open`, `status`, `extensionManagement` and `openExternal`. See [What the `code` CLI channel grants](#what-the-code-cli-channel-grants) | `code .`, `code --wait` as `core.editor`, **and the attach itself** |
-| `vscode-git-*.sock` | yes, through the git extension | your host's GitHub token, for a host name the caller picks. VS Code prompts only for a host it has no session for | `git push`, `pull` and `fetch` over HTTPS, in the UI and in the terminal |
-| `vscode-remote-containers-ipc-*.sock` | yes, directly | an HTTP `POST` on it calls `rpc` on the extension **on your host**. Git uses it as `credential.helper`, so it answers for every host in your host's credential store, with no prompt | the host credential helper, and host docker registry logins |
-
-`blockExtensionIpc` and `blockGitAskpass` are both on by default, so no host credential is
-reachable from the container. That costs push, pull and fetch over HTTPS, and the container needs a
-credential of its own to get them back - `gh auth login` inside it, or a token in its own git
-credential store. Set `blockGitAskpass` to `false` if you would rather keep the host token and push
-straight from the editor, which is what 2.x did.
-
-### Why `vscode-ipc-*.sock` ships open
-
-It is not only the `code` CLI. The VS Code server registers its own channels on one of those
-paths, and it deletes the file when it disposes the hook — with nothing around the call:
-
-```js
-dispose() { ...; this._ipcHandlePath && existsSync(this._ipcHandlePath) && unlinkSync(this._ipcHandlePath) }
+```jsonc
+"remoteUser": "vscode",
+"features": {
+  "ghcr.io/nshafer/devcontainer-features/sandbox:3": {}
+},
+"securityOpt": ["no-new-privileges"]
 ```
 
-A tombstone is root-owned and `/tmp` is sticky, so that `unlinkSync` cannot succeed. It throws,
-and the throw surfaces in `~/.vscode-server/data/logs/*/remoteagent.log` as:
+`remoteUser` must not be `root`. Root can undo every block, so the feature does nothing in a
+container that runs as root. The build says so in a warning.
 
-```
-[error] Error: EPERM: operation not permitted, unlink '/tmp/vscode-ipc-<uuid>.sock'
-    at Module.unlinkSync ... at Eh.dispose ...
-```
+Add `securityOpt` yourself. The feature cannot add it, and [sudo modes](#sudo-modes) explains why.
+The flag stops every setuid program, `sudo` included, so it makes the removal of `sudo` permanent.
+Leave it out if you use `"sudoMode": "restricted"`.
 
-The window then sits on "Configuring Dev Container" for good, with an empty log. This is the same
-shape of failure as the 1.0.0 directory bug below, and it has the same root cause: a tombstone is
-permanent by design, so it cannot coexist with a component that unlinks and rebinds its own path.
-Nothing inside the container can fix it. `blockCodeCli` is there for anyone who accepts the cost.
+### 2. Change these settings on the host
 
-### What the `code` CLI channel grants
+The blocks inside the container cannot be complete. The fixes that fully close the channels are on
+your host. Do these on each machine where an agent runs in a container:
 
-Read from the VS Code source: the CLI server in the extension host, and
-`src/vs/workbench/api/browser/mainThreadCLICommands.ts` on the host side. The `open` result below is
-also tested, on VS Code 1.137.0. Anything that runs as the
-remote user can send these four messages. It does not need the `code` command. A `POST` to the
-socket is enough.
+1. Unset `SSH_AUTH_SOCK` and `DISPLAY` in the environment that starts VS Code. Then VS Code has
+   nothing to forward.
+2. Turn off the Wayland mount in your VS Code user settings:
 
-**`openExternal`** hands a URI to your host. The flag is `code --openExternal`, and `$BROWSER`
-calls it. `--open-external` is not a known option, so the CLI ignores it. What happens next depends
-on the URI scheme:
-
-| Scheme | Result |
-| --- | --- |
-| `file:` | The server in the container drops it. Nothing reaches the host. |
-| `http:`, `https:` | The host asks "Do you want Code to open the external website?" It does not ask for a domain in `workbench.trustedDomains`. |
-| any other scheme | The host opener passes it to the operating system with no prompt. The app registered for the scheme opens it: `mailto:`, `vscode:`, or any scheme an installed app claims. |
-
-The risk is the last row. The attacker chooses the scheme and the whole URI, and no prompt shows.
-
-**`extensionManagement`** installs, removes and lists extensions. The host sends the request to the
-*remote* extension service only, so the extension goes into `~/.vscode-server/extensions` and runs
-in the container extension host, as the remote user. The host refuses an extension that can only
-run in the UI. The install is machine-scoped, so Settings Sync does not copy it to your other
-machines. An installed extension still gets the full VS Code API, and part of that API reaches
-your host UI: `env.openExternal`, commands, and `authentication.getSession`, which prompts. The
-socket is not the only route to this. The remote user owns `~/.vscode-server/extensions` and can
-write an extension into it directly.
-
-**`status`** returns the diagnostics text that "Help: Report Issue" collects.
-
-**`open`** opens files and folders in a VS Code window, and it is the most serious of the four.
-The request names its own `remoteAuthority`, so a `null` there asks the host for a **local** window.
-The path has to use the `vscode-local:` scheme. Every URI that leaves the extension host goes
-through `src/vs/base/common/uriTransformer.ts`, which rewrites `file:` into a path in the container
-and `vscode-local:` into `file:` on the host. This request, sent from the container, opens a new
-local window on the host folder:
-
-```sh
-curl --noproxy '*' --unix-socket "$VSCODE_IPC_HOOK_CLI" -H 'Content-Type: application/json' \
-    -d '{"type":"open","folderURIs":["vscode-local:/host/path"],"forceNewWindow":true,"remoteAuthority":null}' \
-    http://localhost/
-```
-
-In the test, the window opened with no workspace trust prompt. The folder was inside a project that
-the host already trusted, and a trusted parent folder makes its subfolders trusted too. The git
-extension on the host then offered to open the parent repository.
-
-The container cannot read anything back this way. The response is `null`. But the path can be any
-folder or file on the host, and the window runs your host extensions against it. The next section
-says why that is enough to run a command on the host.
-
-### The real risk: the workspace bind mount
-
-A process in the container can run a command on your host, as your host user, with no click. The
-`code` CLI channel is not the root cause. The root cause is the workspace bind mount: host tools
-read files that the container can write. The channel only lets the attacker choose the moment.
-
-**The zero-click chain.**
-
-1. The attacker writes one setting into `.git/config` in the workspace:
-
-   ```ini
-   [core]
-       fsmonitor = "sh -c 'any command here' #"
+   ```jsonc
+   "dev.containers.mountWaylandSocket": false
    ```
 
-   On Linux, Dev Containers gives the container user the same UID as your host user. So git on
-   the host sees a repository that you own, and it trusts the config.
-2. The attacker sends the `open` request above for the repository root, with a `vscode-local:` URI.
-3. A local window opens. The folder is trusted, so the git extension on the host opens the
-   repository and runs `git status`. It asks first only for a repository in a *parent* folder.
-4. `git status` runs the `core.fsmonitor` command on the host.
+3. Keep your source in a container volume, not in a bind mount of a host folder. The command
+   **Dev Containers: Clone Repository in Container Volume** does this. See
+   [The workspace bind mount](#the-workspace-bind-mount).
+4. Run the agent as a different Unix user than the remote user, if you can. Another user cannot
+   connect to a forwarded socket.
 
-Step 4 is tested: `git status` in git 2.55.0 runs the command. The git extension in VS Code 1.137.0
-has no reference to `fsmonitor`, so it does not block it. The full chain is not tested on a host.
+### 3. Rebuild the container and check the result
 
-**Other routes, and what each one needs from you.**
-
-| Route | What runs on the host | What you must do |
-| --- | --- | --- |
-| `core.fsmonitor` in `.git/config` | any command | nothing |
-| `initializeCommand` in `.devcontainer/devcontainer.json` | any command | click "Reopen in Container", or rebuild |
-| `mounts` or `runArgs` in `devcontainer.json` | a container with your host home or `/var/run/docker.sock` | rebuild |
-| `.git/hooks/*` or `core.hooksPath` | any command | commit from the host |
-| `.vscode/tasks.json` with `runOptions.runOn: folderOpen` | any command | accept the automatic tasks prompt |
-| a `vscode-local:` file URI | a host file shows on screen, for example `~/.ssh/id_ed25519` | nothing, but the container gets no copy |
-
-**Without the channel,** every route in that table still works. It fires the next time you run
-`git` in the folder, open the folder in a local window, or rebuild. A shell prompt that shows git
-status is enough for `core.fsmonitor`. The channel changes "the next time you do something" into
-"now". Nothing inside the container can close the channel, for the reason in the section on
-`vscode-ipc-*.sock` above.
-
-**What reduces the risk.**
-
-1. Keep the source in a container volume, not a bind mount. "Dev Containers: Clone Repository in
-   Container Volume" does this. Then no host tool reads a file that the container wrote.
-2. If you keep the bind mount, do not run `git` or VS Code on the host in that folder while an
-   agent works in the container.
-3. Before you rebuild, run `git diff .devcontainer/` and read `.git/config`.
-4. On the host, trust single project folders, not a parent such as `~/projects`. A trusted parent
-   makes every folder under it trusted, so any of them is a trusted target for the `open` request.
-
-### Two paths ask for a credential, not one
-
-`git push` over HTTPS fails through both of them when both are sealed, and the log names each one:
-
-```
-> git push origin main:main
-Unable to connect to VS Code Dev Containers extension.
-Error in request Error: connect EACCES /tmp/vscode-remote-containers-ipc-<uuid>.sock
-Missing or invalid credentials.
-Error: connect EACCES /tmp/vscode-git-<id>.sock
-```
-
-The first line is `credential.helper`, which VS Code writes into `/etc/gitconfig`. The second is
-`GIT_ASKPASS`. Either one alone is enough to authenticate a push, so closing only one of them
-leaves the host token reachable. That is why 3.0 closes both, and why the output above is what a
-push looks like on the defaults.
-
-## What this actually buys you — read this first
-
-**This is mitigation, not a boundary.** It makes the forwarded channels hard to reach by accident
-and awkward to reach on purpose. It does not make them unreachable. Nothing installed *inside* the
-container can, because the hole is in how VS Code forwards them.
-
-The reason is structural. VS Code's helper runs **as the remote user** and calls
-`net.Server.listen()` on a socket inside the container. Anything else that runs as that user may
-`connect()` to it. The socket has to exist. A path the helper cannot write is a container you cannot
-attach to. Block the path, and the helper fails like this:
-
-```
-Container server: Error: listen EACCES: permission denied /tmp/.X11-unix/X0
-```
-
-So the socket appears, and this feature takes it. Between those two moments it is live and usable.
-This is measured against a socket forwarded the way VS Code forwards one, with an attacker looping
-on `connect()`:
-
-| sealing driven by | usable connections before the seal | window |
-| --- | --- | --- |
-| the 1s poll alone | 15,299 | 993 ms |
-| inotify (the default) | **7** | **5 ms** |
-
-inotify is a ~2,000× reduction, and it is why the feature installs `inotify-tools`. It is still not
-zero, and **one connection is enough** to have your host's `ssh-agent` sign something. The window
-reopens on every window you attach, not only the first.
-
-**All of that rests on the remote user not being root.** A stock dev container hands them
-password-less sudo, and one `sudo chmod 666` undoes every seal here. So the feature takes the
-blanket grant away. It deletes the `sudoers.d` entry, drops the user from `sudo`/`wheel`/`admin`,
-then *verifies by outcome* and strips the setuid bit from `sudo` if any route survived. **This is
-the change that turns the rest from theatre into something an agent has to work around rather than
-switch off.** It also means `sudo` stops working in the container, for you too.
-
-That is `sudoMode: "drop"`, the default. Two other modes exist, and the sudo section below is the
-one part of this README worth reading before you use either.
-
-What the feature *does* hold: once sealed, a UUID-named socket is closed for good. `/tmp` is sticky,
-so the remote user cannot remove a root-owned file in it at all. Recreating one gets you a socket
-bound to your own process with nothing behind it, because the forwarding lives in the helper
-process, not in the file. So opportunistic use, tools that stumble onto `SSH_AUTH_SOCK`, and an
-agent that does not specifically race the seal all fail.
-
-**The only fixes that actually close it are outside this feature** — see the host setup above. Treat
-this feature as a seatbelt for a coding agent that does something careless, not armour against one
-that was told to go looking.
-
-## How the seals work
-
-The feature closes the channels with three mechanisms, in descending order of how much they are
-worth.
-
-**Sealing beats deleting.** The obvious move is to delete the sockets, but deleting frees the path
-and VS Code puts a working one back. That is why approaches built on `find -delete` need a
-background loop that re-deletes every 30 seconds. This feature takes the socket instead, `chown
-root:root` plus `chmod 000`, and that closes three doors at once:
-
-| | after `rm` | after sealing |
-| --- | --- | --- |
-| agent connects | recreated, works | `EACCES` |
-| agent deletes it | n/a | `EPERM` — `/tmp` is sticky and the file is root's |
-| VS Code recreates it | yes | `EADDRINUSE` |
-
-**Everything is sealed after the fact, never preempted.** The obvious refinement is to make the
-directories these sockets live in — `/tmp/.X11-unix` and `~/.gnupg` — root-owned and read-only, so
-the socket can never be created. That is a stronger boundary, and it works, but it makes the
-container impossible to open. VS Code's helper creates those sockets while attaching, fails, and
-dies. It leaves **"Configuring Dev Container" on screen forever**, with no error and no timeout. So
-the feature lets the forwarding succeed and takes the channel a moment later. Blocking that starts a
-second late beats blocking that never lets you open the editor. `test/sandbox/test.sh` checks that
-the directories stay writable before it checks anything else.
-
-The cost is stated rather than hidden. With the directory writable, the user who owns that directory
-can unlink a tombstone inside it. So the fixed-name channels — X11 and GPG — are open for the moment
-between the helper creating the socket and inotify firing, rather than never. The UUID-named
-channels keep the stronger guarantee, because `/tmp` is sticky and the user cannot remove a
-root-owned file in it at all.
-
-**The rest needs a daemon, not a bounded loop.** The remaining names carry a fresh UUID per window,
-so every VS Code window you attach forwards a whole new set, hours after the first. A loop that runs
-ten passes and stops has stopped covering you. The feature's `entrypoint` runs as root before VS
-Code attaches and leaves a sweeper behind for the life of the container.
-
-## Some things worth knowing
-
-**Wayland cannot be blocked from inside, and you must not try.** It is not a socket VS Code creates
-in the container. It is a bind mount of the host's `/run/user/<uid>/wayland-0`. You cannot remove it
-(`EBUSY`) or unmount it (no `CAP_SYS_ADMIN`), and **permission changes on a bind mount write through
-to the source**. So sealing it would set mode `000` on the socket your own desktop session runs on.
-Every mutation in the feature is gated on a `/proc/self/mountinfo` check for exactly this reason,
-and `test/sandbox/wayland_bind_mount.sh` shows the write-through happening and then proves the guard
-stops it. The only real fix is host-side, in the host setup above.
-
-**Depth 3, not 2.** `XDG_RUNTIME_DIR` in a dev container is `/tmp/user/<uid>`, and a forwarded
-socket can live there rather than directly in `/tmp` — the git credential socket, the one that
-hands out your GitHub token, is the usual example. A sweep two levels deep looks thorough and
-silently leaves it open.
-
-**The manifest is reported on, never acted on.** `REMOTE_CONTAINERS_SOCKETS` is the authoritative
-list of what was forwarded, so a channel these globs do not know about still gets surfaced. The
-unprivileged `postStart`/`postAttach` hooks check it rather than root sweeping it, for two reasons.
-Root cannot read another user's `/proc/<pid>/environ` without `CAP_SYS_PTRACE`, which Docker does
-not grant — and a feature that granted it would hand the remote user the ability to ptrace the very
-daemon doing the hardening. Nor should root `chmod 000` a path named by something the remote user
-controls, because that turns the feature into a denial-of-service primitive against `/etc/passwd`.
-So a new channel gets you a warning, not silence, and not an exploit.
-
-**The env scrub is the weakest layer and is not a control.** VS Code re-injects `SSH_AUTH_SOCK`,
-`GIT_ASKPASS` and friends into everything it starts, and any program can read a path back out of
-`/proc`. The sockets being unusable is the control. The scrub is wired in at `/etc/profile.d`,
-`/etc/bash.bashrc`, `/etc/zsh/zshenv` and `BASH_ENV`, all in `/etc`, never in `$HOME`. The reason is
-`persist-homedir`: it puts `/home` on a volume that masks whatever the image wrote to `~/.bashrc`,
-so a scrub installed there works exactly once and then stops.
-
-**The scrub follows the blocks, one channel at a time.** `install.sh` generates the list at build
-time and writes one `unset` line per *blocked* channel. For an open channel the variable stays,
-because there the scrub would not be cosmetic — a terminal with no `GIT_ASKPASS` cannot
-authenticate a push however reachable the socket is, and a terminal with no `VSCODE_IPC_HOOK_CLI`
-has no working `code`.
-
-Check the result at any time. It exits non-zero if anything is still reachable:
+Run `sandbox-status` in the container. It reads only, so it is always safe to run. It exits with an
+error code if a channel is still open.
 
 ```console
 $ sandbox-status
@@ -427,8 +120,157 @@ sandbox: forwarded host channels in this container
   sweeper          running (inotify, 1s poll backstop)
 ```
 
-In restricted mode it lists the allowlist rather than counting it, because the list is the boundary
-and nobody can audit a number:
+The feature writes what it does to `/var/log/devcontainer/sandbox.log`.
+
+## Channels
+
+This is the full list of channels that VS Code forwards. The extension itself writes the list into
+the `REMOTE_CONTAINERS_SOCKETS` variable in the container.
+
+| Channel        | Path                                             | Option              | Default     | What it gives a program in the container |
+| -------------- | ------------------------------------------------ | ------------------- | ----------- | ---------------------------------------- |
+| SSH agent      | `/tmp/vscode-ssh-auth-<uuid>.sock`               | `blockSshAgent`     | blocked     | Signing with your host SSH keys.         |
+| GPG agent      | `~/.gnupg/S.gpg-agent`                           | `blockGpgAgent`     | blocked     | Signing with your host GPG keys.         |
+| GPG keyring    | `~/.gnupg/S.keyboxd`                             | `blockGpgAgent`     | blocked     | Your keyring.                            |
+| X11 display    | `/tmp/.X11-unix/X<n>`                            | `blockX11`          | blocked     | Your desktop: keystrokes and screenshots. |
+| Extension IPC  | `vscode-remote-containers-ipc-<uuid>.sock`       | `blockExtensionIpc` | blocked     | Calls to the extension on your host, including every credential that your host stores. |
+| Git credentials | `vscode-git-<id>.sock`                          | `blockGitAskpass`   | blocked     | Your GitHub token, through `GIT_ASKPASS`. |
+| `code` CLI     | `vscode-ipc-<uuid>.sock`                         | `blockCodeCli`      | **open**    | A local VS Code window on any host path. A URI that an app on your host opens. |
+| Wayland        | `/tmp/vscode-wayland-<uuid>.sock`                | none                | open        | Your desktop. This one is a bind mount. See [Limits](#limits). |
+
+### The two credential channels
+
+Two channels answer a request for a credential, and either one is enough to push over HTTPS:
+
+- The extension IPC socket. VS Code writes it into `/etc/gitconfig` as `credential.helper`. It
+  answers for every host in the credential store of your host, with no prompt.
+- The git credentials socket. Git reaches it through `GIT_ASKPASS`. VS Code asks you only for a
+  host that it has no session for.
+
+Both are blocked by default, so a push over HTTPS fails and names both:
+
+```
+> git push origin main:main
+Unable to connect to VS Code Dev Containers extension.
+Error in request Error: connect EACCES /tmp/vscode-remote-containers-ipc-<uuid>.sock
+Missing or invalid credentials.
+Error: connect EACCES /tmp/vscode-git-<id>.sock
+```
+
+Run `gh auth login` in the container to get a login of its own. Set `blockGitAskpass` to `false` if
+you want to push with the token of your host instead.
+
+## How the blocks work
+
+**The feature seals a socket. It does not delete it.** It runs `chown root:root` and `chmod 000` on
+the socket. A deleted socket is worse, because the path is then free and VS Code makes a new one
+that works.
+
+| Action                      | After a delete       | After a seal                                |
+| --------------------------- | -------------------- | ------------------------------------------- |
+| A program connects          | It works.            | `EACCES`                                    |
+| A program deletes the file  | Not applicable.      | `EPERM`. `/tmp` is sticky, and root owns the file. |
+| VS Code makes a new socket  | It works.            | `EADDRINUSE`                                |
+
+**The feature seals each socket after VS Code creates it.** It does not take the path in advance.
+Taking the path first looks safer, and it works, but then the container never opens: the helper of
+VS Code fails to create the socket, and the window stays on "Configuring Dev Container" with no
+error and no timeout.
+
+**A root daemon does the sealing.** The entrypoint of the feature runs as root when the container
+starts, before VS Code attaches. It seals the sockets with fixed names, then leaves a daemon
+running for the life of the container. The daemon watches for new sockets with `inotify`, and
+seals one about a millisecond after it appears. A poll every second, from the `sweepInterval`
+option, catches anything that `inotify` missed.
+
+The daemon has to keep running, because each VS Code window that you open forwards a new set of
+sockets with new names in them.
+
+**The daemon looks three folders deep.** In a dev container, `XDG_RUNTIME_DIR` is `/tmp/user/<uid>`,
+and the git credential socket is often there. A search two folders deep misses it.
+
+**The feature reports a channel that it does not know.** The `postStart` and `postAttach` scripts
+run as the remote user, and they read `REMOTE_CONTAINERS_SOCKETS`. If that list names a socket that
+the daemon did not seal, you get a warning. The scripts report only. They do not seal, because the
+remote user controls the content of that variable, and root must not change the mode of a path that
+the remote user names.
+
+**The environment scrub is the weakest layer.** With `scrubEnv` on, every shell unsets the
+variables that name the blocked sockets: `SSH_AUTH_SOCK`, `DISPLAY`, `GIT_ASKPASS`, `BROWSER`,
+`VSCODE_IPC_HOOK_CLI` and `REMOTE_CONTAINERS_*`. This is not a control. VS Code puts the variables
+back in each process that it starts, and any program can read the path from `/proc`. The sealed
+socket is the control. The scrub only stops a tool from finding a path by accident.
+
+The scrub covers the blocked channels only. An open channel keeps its variable, because a shell
+without `GIT_ASKPASS` cannot push even when the socket works.
+
+The scrub lines go in `/etc/profile.d`, `/etc/bash.bashrc`, `/etc/zsh/zshenv` and `BASH_ENV`. They
+are all in `/etc`, never in the home directory, because [`persist-homedir`](../persist-homedir) puts
+`/home` on a volume that hides what the image wrote there.
+
+## sudo modes
+
+Every block is a file that root owns. A remote user who can become root undoes all of them with one
+command. So what happens to `sudo` is the most important part of this feature. The `sudoMode`
+option sets it.
+
+| `sudoMode`         | What the remote user can run as root                          | Use it when                          |
+| ------------------ | ------------------------------------------------------------- | ------------------------------------ |
+| `drop` (default)   | Nothing. The feature removes the grant, and removes the setuid bit from `sudo` if a route survived. | Almost always. |
+| `restricted`       | Only the exact command lines in `sudoCommands`, and only as root. | A project needs one or two root commands. |
+| `keep`             | Everything. The feature then protects nothing.                 | Never, if you can help it.          |
+
+In `drop` mode, the feature deletes the `sudoers.d` entry, removes the user from the `sudo`, `wheel`
+and `admin` groups, then tests the result with `sudo -n true`. If any route is still open, it
+removes the setuid bit from `sudo`.
+
+### Why you add `no-new-privileges` yourself
+
+The `no-new-privileges` flag stops every setuid program. It is a second lock: a setuid program that
+the drop missed still cannot give root back.
+
+The feature cannot set the flag. A `devcontainer-feature.json` file is static, so a feature cannot
+set a flag only for some option values. The flag blocks `sudo` for everyone, restricted mode
+included. So the flag lives in your `devcontainer.json`, where you control it.
+
+```jsonc
+"securityOpt": ["no-new-privileges"]
+```
+
+`sandbox-status` shows whether the flag is set.
+
+**The flag reaches into a nested Docker daemon, and nothing can clear it.** The kernel gives
+`no_new_privs` to every child process. A `docker-in-docker` daemon in a container with the flag
+gives it to every container that it starts. In those containers, `sudo` fails with *"the no new
+privileges flag is set"*, whatever their own settings say. Give such a container root directly
+instead, with a `remoteUser` of `root` or with `docker run -u root`.
+
+### Restricted mode
+
+The blanket grant still goes away. In its place, the feature writes
+`/etc/sudoers.d/900-sandbox-restricted`, with one line for each command that you name:
+
+```jsonc
+"sudoMode": "restricted",
+"sudoCommands": "/bin/systemctl restart myapp,/usr/sbin/nginx -s reload"
+```
+
+Rules of the generated file:
+
+- **Root is the only target user.** A caller cannot choose the user to run as. That closes a whole
+  class of bugs, such as CVE-2019-14287.
+- **The arguments are exact.** `sudo /usr/bin/id -u` works and `sudo /usr/bin/id -g` does not. An
+  entry with no arguments allows every argument, which is the most common way that an allowlist
+  turns into full root.
+- **`visudo` checks the file before the feature installs it.** A syntax error in one `sudoers.d`
+  file stops `sudo` for everyone, root included.
+- **The feature writes the file again at each container start.** A later feature, or a
+  `postCreateCommand`, can put a blanket grant back.
+
+> **Caution:** The list becomes the trust boundary of this whole feature. Any command in it that
+> can write a file or start a program undoes every block above.
+
+`sandbox-status` prints the list in restricted mode, because nobody can review a number:
 
 ```console
   sudo             restricted -- blanket grant gone, 2 command(s) allowed
@@ -437,69 +279,10 @@ and nobody can audit a number:
   no-new-privs     not set (sudoMode=restricted needs it unset)
 ```
 
-## sudo: the three modes, and what each one costs
+### The check on `sudoCommands`
 
-Every seal this feature makes is a root-owned file. A remote user who can become root undoes all of
-them with one command, so what happens to their sudo grant *is* the feature. Set it with `sudoMode`.
-
-| `sudoMode` | What the remote user can run as root | Use it when |
-| --- | --- | --- |
-| `drop` (default) | Nothing. The grant goes, and the setuid bit goes with it if anything survived. | Almost always. |
-| `restricted` | Only the exact command lines in `sudoCommands`, and only as root. | A project genuinely needs one or two root commands. |
-| `keep` | Everything. This feature becomes decoration. | Never, knowingly. |
-
-**`no-new-privileges` cannot be set by this feature.** The flag blocks every setuid path, so it adds a
-second lock: a setuid binary the drop misses still cannot hand back root. It blocks `sudo` for
-*everyone*, though, restricted included — and a feature cannot set an option conditionally, because
-`devcontainer-feature.json` is static metadata with no way to read an option value. So restricted
-mode and a feature-supplied flag cannot both exist. The flag moves to your `devcontainer.json`,
-where you add it yourself when you use `drop`:
-
-```jsonc
-"securityOpt": ["no-new-privileges"]
-```
-
-Add it. `sandbox-status` tells you whether it is set, and nags in `drop` mode when it is not. Note
-that `capDrop` has no feature-level equivalent at all.
-
-**The flag reaches inside a nested Docker daemon, and cannot be cleared.** The kernel passes
-`no_new_privs` to every child process and never clears it. So a `docker-in-docker` daemon in a
-container that carries the flag hands it to every container it starts. `sudo` in those containers
-fails with *"the no new privileges flag is set"*, whatever their own `securityOpt` says — and so
-does restricted mode, for the same reason. Give the process the root it needs by name — a
-`remoteUser` of `root`, or `docker run -u root` — rather than by a setuid binary.
-
-### Restricted mode
-
-The blanket grant still goes. In its place the feature writes `/etc/sudoers.d/900-sandbox-restricted`
-— one line per entry, root as the only target user, arguments pinned exactly as you wrote them:
-
-```jsonc
-"sudoMode": "restricted",
-"sudoCommands": "/bin/systemctl restart myapp,/usr/sbin/nginx -s reload"
-```
-
-Rules the generator holds to, and why each one:
-
-- **Root only, never `(ALL:ALL)`.** Letting the caller pick the target user buys nothing here and
-  costs the whole runas bug class, CVE-2019-14287 included.
-- **Arguments are pinned.** `sudo -l /usr/bin/id -u` is permitted and `sudo -l /usr/bin/id -g` is
-  not. A sudoers entry with no arguments permits *every* argument, which is the single most common
-  way an allowlist turns out to be a blanket grant.
-- **The file is validated with `visudo` before it is installed.** A syntax error in a `sudoers.d`
-  fragment does not fail that fragment. It makes `sudo` refuse to run at all, for everyone, root
-  included.
-- **It is rewritten at every container start,** like the rest of the feature, because a later
-  feature or a project's `postCreate` can put a blanket grant back.
-
-**The allowlist becomes the trust boundary of the whole feature.** Any command in it that can write
-a file or start a program undoes every seal above. That is not a caveat, it is the deal.
-
-### The lint
-
-`sudoCommands` is checked at build time and the build **fails** on anything that reads as a route
-back to full root. Every rule below is a real escape that a careful reviewer misses, not a style
-rule. Run one by hand at any time:
+The feature checks each entry when the image builds, and **the build fails** if an entry is a route
+back to full root. Each rule below is a real escape. You can run the check by hand:
 
 ```console
 $ sandbox.sh lint-sudo '/usr/sbin/iptables'
@@ -507,58 +290,220 @@ error: iptables with no arguments permits every argument, and it rewrites the fi
        switches off the egress-filter feature entirely
 ```
 
-Rejected outright:
+Entries that the check rejects:
 
-| What | Why |
-| --- | --- |
-| A relative path — `systemctl restart x` | The caller owns `PATH`, so the caller picks the binary. |
-| A wildcard — `systemctl reboot *` | A sudoers wildcard is a glob. It matches `/` and spans arguments, so `chmod 666 /tmp/*` permits `chmod 666 /tmp/../etc/shadow`. |
-<!-- The dollar below is written as ` $ ` on purpose. generate-docs builds the README with a
-     JavaScript String.replace, and a dollar followed by a backtick is a replacement pattern
-     there: it means "everything before the match", so one plain dollar in a code span injects
-     a whole second copy of the template into this table. A code span with spaces around it
-     renders identically and puts a space after the dollar instead. -->
-| Shell syntax — `;` `&&` `\|` `` ` `` ` $ ` `<` `>` quotes | `sudo` execs the command. It never runs a shell, so `/bin/foo; rm -rf /` is one entry, not two. |
-| `!` | sudoers command negation denies a *path*. The same binary copied elsewhere is a different path. |
-| A shell or interpreter — `sh`, `bash`, `python3`, `perl`, `awk`, `node` | Runs anything as root, pinned or not. |
-| A command that runs a command — `env`, `xargs`, `find`, `timeout`, `nohup`, `watch`, `systemd-run` | Same, one step removed. |
-| An editor or pager — `vim`, `less`, `man`, `nano` | Shell escape. `:!sh`. |
-| A privilege tool — `su`, `chroot`, `unshare`, `nsenter`, `setcap`, `passwd`, `usermod`, `mount` | Edits the privilege model itself. |
-| A container runtime — `docker`, `podman`, `runc`, `ctr` | A container mounts the host filesystem as root. |
-| A debugger — `gdb`, `strace` | Drives another process as root. |
-| `needrestart` | A known local root escalation — CVE-2024-48990 and siblings. It reads a poisoned `PYTHONPATH` out of an *unrelated* running process, so sudo's `env_reset` does not stop it. |
-| `true`, `false`, `:` | The feature runs `sudo -n true` to prove the blanket grant is gone. |
-| A binary, or any directory above it, that is not root-owned or is group/other writable | Whoever can write it, or write any directory on the way to it, chooses what `sudo` runs. |
-| Any of the *pin-sensitive* list below **with no arguments** | No arguments means every argument. |
+| What                                                                   | Why                                                      |
+| ---------------------------------------------------------------------- | -------------------------------------------------------- |
+| A relative path, such as `systemctl restart x`                         | The caller controls `PATH`, so the caller picks the program. |
+| A wildcard, such as `systemctl reboot *`                               | A wildcard in sudoers matches `/` and spans arguments. So `chmod 666 /tmp/*` allows `chmod 666 /tmp/../etc/shadow`. |
+| Shell syntax: `;` `&&` `\|` `<` `>`, a backtick, a dollar sign or a quote | `sudo` runs the command itself. It never runs a shell, so `/bin/foo; rm -rf /` is one command. |
+| `!`                                                                    | Negation in sudoers denies a path. The same program at another path is allowed. |
+| A shell or interpreter: `sh`, `bash`, `python3`, `perl`, `awk`, `node`  | It runs anything as root.                                |
+| A program that runs a program: `env`, `xargs`, `find`, `timeout`, `nohup`, `watch`, `systemd-run` | The same, one step away.        |
+| An editor or pager: `vim`, `less`, `man`, `nano`                       | They can start a shell. In `vim`, `:!sh`.                |
+| A privilege tool: `su`, `chroot`, `unshare`, `nsenter`, `setcap`, `passwd`, `usermod`, `mount` | It changes the privilege model itself. |
+| A container tool: `docker`, `podman`, `runc`, `ctr`                    | A container can mount the host filesystem as root.       |
+| A debugger: `gdb`, `strace`                                            | It controls another process as root.                     |
+| `needrestart`                                                          | A known local root escalation, CVE-2024-48990 and others. It reads `PYTHONPATH` from another running process, so `env_reset` does not stop it. |
+| `true`, `false`, `:`                                                   | The feature runs `sudo -n true` to prove that the grant is gone. |
+| A program, or a folder above it, that root does not own, or that the group or other users can write | Whoever can write it picks what `sudo` runs. |
+| Any program in the table below **with no arguments**                   | No arguments means every argument.                       |
 
-Warned about, and allowed — an entry is only as safe as the exact arguments you pinned:
+Entries that the check allows with a warning. Each one is only as safe as the arguments that you
+pinned:
 
-| What | Why it is only as safe as its arguments |
-| --- | --- |
-| `cp`, `mv`, `tee`, `dd`, `install`, `ln`, `chmod`, `chown` | Writes or re-owns whatever you named. A `cp` whose *source* the remote user can write is a root-owned copy of their content. |
-| `tar`, `unzip`, `rsync`, `scp` | Writes whatever path the archive or the far side names. |
-| `systemctl`, `service` | Starts, stops or masks a unit. And a unit file the remote user can write plus an allowed `daemon-reload` is root. |
-| `apt-get`, `dpkg`, `pip`, `npm`, `gem` | Installing a package runs its maintainer scripts as root. |
-| `git`, `curl`, `ssh`, `socat` | Runs or fetches what the far side chooses. |
-| `journalctl`, `dmesg` | Pipes to a pager, and the pager has a shell escape. Pin `--no-pager`. |
-| `iptables`, `nft`, `ipset`, `ip`, `tc`, `ufw` | Rewrites the firewall, which switches off the `egress-filter` feature in this same repo completely. |
+| What                                                     | Why                                                        |
+| -------------------------------------------------------- | ---------------------------------------------------------- |
+| `cp`, `mv`, `tee`, `dd`, `install`, `ln`, `chmod`, `chown` | They write or re-own what you named. A `cp` whose source the remote user can write makes a root-owned copy of their content. |
+| `tar`, `unzip`, `rsync`, `scp`                           | They write the paths that the archive or the far side names. |
+| `systemctl`, `service`                                   | They start, stop or mask a unit. A unit file that the remote user can write, plus an allowed `daemon-reload`, is root. |
+| `apt-get`, `dpkg`, `pip`, `npm`, `gem`                   | Package installs run scripts as root.                      |
+| `git`, `curl`, `ssh`, `socat`                            | They run or fetch what the far side chooses.               |
+| `journalctl`, `dmesg`                                    | They pipe to a pager, and a pager can start a shell. Pin `--no-pager`. |
+| `iptables`, `nft`, `ipset`, `ip`, `tc`, `ufw`            | They rewrite the firewall, which turns off the [`egress-filter`](../egress-filter) feature. |
 
-If you have read a finding and decided it is wrong or acceptable, set `sudoAllowUnsafe: true`. It
-downgrades every error to a warning and installs the list anyway. Nothing else changes: the findings
-still print, at build time and at every container start.
+Set `sudoAllowUnsafe` to `true` to install the list after you read each finding and decided that it
+is acceptable. The findings still print, at build time and at each container start.
 
-**It fails closed, and all the way.** A list that does not lint clean is not installed, and the mode
-degrades to a full `drop` — not to "restricted, minus the rejected entries". You asked for a smaller
-grant than `drop`, so the safe direction to be wrong in is a smaller one still. `sandbox-status`
-says so plainly when this happens.
+**The check fails closed.** A list that does not pass is not installed, and the mode becomes a full
+`drop`. It does not become "restricted, without the rejected entries". `sandbox-status` says so.
 
-**There is no way to read the list from a file in the workspace,** and there will not be. The
-workspace is writable by the remote user, so a sudoers list read from it would be a self-service
-root grant. `sudoCommands` is a build-time option only.
+**You cannot read the list from a file in the workspace.** The remote user can write the workspace,
+so such a file would be a way to grant root to itself. `sudoCommands` is a build-time option only.
 
-Finally, the feature is only as good as the container's user model. **It does nothing if
-`remoteUser` is root**, since root can `chmod` any tombstone back. `install.sh` says so loudly when
-it detects that.
+## Limits
+
+**There is a short window at each attach.** The socket must exist, because a container where the
+helper of VS Code cannot create the socket is a container that you cannot open. So the socket
+appears, and the feature takes it a moment later. The table shows a measurement against a forwarded
+socket, with a program in a loop that calls `connect()`:
+
+| How the feature seals       | Connections before the seal | Window  |
+| --------------------------- | --------------------------- | ------- |
+| The 1 second poll alone     | 15,299                      | 993 ms  |
+| `inotify` (the default)     | **7**                       | **5 ms** |
+
+`inotify` is about 2,000 times better, and the feature installs `inotify-tools` for it. It is still
+not zero, and **one connection is enough** to sign something with the `ssh-agent` of your host. The
+window opens again for each window that you attach.
+
+**A fixed-name socket has a weaker guarantee than a UUID-named one.** The folders `/tmp/.X11-unix`
+and `~/.gnupg` stay writable, because the container cannot start otherwise. The user who owns the
+folder can delete a sealed socket there and make a new one. The names with a UUID in them are in
+`/tmp`, which is sticky, so the remote user cannot delete a file that root owns.
+
+**Wayland cannot be blocked from inside the container, and the feature does not try.** The Wayland
+socket is not a socket that VS Code creates in the container. It is a bind mount of
+`/run/user/<uid>/wayland-0` from your host. The container cannot delete it (`EBUSY`) or unmount it
+(no `CAP_SYS_ADMIN`), and **a permission change on a bind mount changes the host file**. A seal
+would set mode `000` on the socket of your own desktop session. Every change that the feature makes
+first checks `/proc/self/mountinfo` for this reason. Turn off the mount on the host instead.
+
+**A sealed socket stays sealed.** The remote user cannot delete the file in `/tmp`. A new socket at
+the same path belongs to their own process and has nothing behind it, because the forwarding lives
+in the helper process, not in the file. So a tool that finds `SSH_AUTH_SOCK` by accident fails, and
+an agent that does not race the seal fails.
+
+Treat this feature as a seat belt for an agent that does something careless. It is not armor
+against an agent that was told to go looking.
+
+## The `code` CLI channel
+
+`blockCodeCli` is off by default. A seal on this socket stops the container from attaching: the VS
+Code server deletes that path when it shuts the channel down, a file that root owns makes the delete
+throw `EPERM`, and the window stays on "Configuring Dev Container".
+
+```js
+dispose() { ...; this._ipcHandlePath && existsSync(this._ipcHandlePath) && unlinkSync(this._ipcHandlePath) }
+```
+
+The error goes to `~/.vscode-server/data/logs/*/remoteagent.log`:
+
+```
+[error] Error: EPERM: operation not permitted, unlink '/tmp/vscode-ipc-<uuid>.sock'
+    at Module.unlinkSync ... at Eh.dispose ...
+```
+
+Nothing in the container can fix this. Set `blockCodeCli` to `true` only if you accept that the
+container does not attach.
+
+### What the channel gives away
+
+Anything that runs as the remote user can send four message types to that socket. It does not need
+the `code` command. An HTTP `POST` to the socket is enough.
+
+**`open`** opens files and folders in a VS Code window. This is the most serious of the four. The
+request names its own `remoteAuthority`, so a `null` value asks your host for a **local** window.
+The path uses the `vscode-local:` scheme, which VS Code rewrites to a `file:` path on your host.
+This request, sent from inside the container, opens a window on a host folder:
+
+```sh
+curl --noproxy '*' --unix-socket "$VSCODE_IPC_HOOK_CLI" -H 'Content-Type: application/json' \
+    -d '{"type":"open","folderURIs":["vscode-local:/host/path"],"forceNewWindow":true,"remoteAuthority":null}' \
+    http://localhost/
+```
+
+In a test on VS Code 1.137.0, the window opened with no workspace trust prompt, because the folder
+was inside a project that the host already trusted. A trusted folder makes its subfolders trusted.
+The git extension on the host then offered to open the parent repository.
+
+The container reads nothing back. The response is `null`. But the path can be any file or folder on
+your host, and the window runs your host extensions against it. The next section shows why that is
+enough to run a command on your host.
+
+**`openExternal`** gives a URI to your host. The `code --openExternal` flag and the `BROWSER`
+variable both use it.
+
+| Scheme            | What your host does                                                            |
+| ----------------- | ------------------------------------------------------------------------------ |
+| `file:`           | The server in the container drops it. Nothing reaches your host.               |
+| `http:`, `https:` | Your host asks "Do you want Code to open the external website?". It does not ask for a domain in `workbench.trustedDomains`. |
+| Any other scheme  | Your host gives it to the operating system with no prompt. The app that is registered for the scheme opens it. |
+
+The last row is the risk. The attacker picks the scheme and the whole URI, and you see no prompt.
+
+**`extensionManagement`** installs, removes and lists extensions. The extension goes into
+`~/.vscode-server/extensions` and runs in the container, as the remote user. Your host refuses an
+extension that can run in the host UI only. The install is machine-scoped, so Settings Sync does not
+copy it to your other machines. An installed extension still gets the full VS Code API, and part of
+that API reaches your host UI: `env.openExternal`, commands, and `authentication.getSession`, which
+prompts. The socket is not the only route here. The remote user owns
+`~/.vscode-server/extensions` and can write an extension into it.
+
+**`status`** returns the text that "Help: Report Issue" collects.
+
+## The workspace bind mount
+
+**A program in the container can run a command on your host, as your host user, with no click.**
+The `code` CLI channel is not the cause. The cause is the workspace bind mount: tools on your host
+read files that the container can write. The channel only lets the attacker pick the moment.
+
+The chain:
+
+1. The attacker writes one setting into `.git/config` in the workspace:
+
+   ```ini
+   [core]
+       fsmonitor = "sh -c 'any command here' #"
+   ```
+
+   On Linux, Dev Containers gives the container user the same UID as your host user. So git on the
+   host sees a repository that you own, and it trusts the config.
+2. The attacker sends the `open` request above for the root of the repository.
+3. A local window opens. The folder is trusted, so the git extension on your host opens the
+   repository and runs `git status`.
+4. `git status` runs the `core.fsmonitor` command on your host.
+
+Step 4 is tested: `git status` in git 2.55.0 runs the command. The git extension in VS Code 1.137.0
+has no reference to `fsmonitor`, so it does not stop it. The full chain is not tested on a host.
+
+Other routes, and what each one needs from you:
+
+| Route                                                         | What runs on your host                                         | What you must do                    |
+| ------------------------------------------------------------- | -------------------------------------------------------------- | ----------------------------------- |
+| `core.fsmonitor` in `.git/config`                             | Any command.                                                   | Nothing.                            |
+| `initializeCommand` in `.devcontainer/devcontainer.json`      | Any command.                                                   | Click "Reopen in Container", or rebuild. |
+| `mounts` or `runArgs` in `devcontainer.json`                  | A container with your host home folder or `/var/run/docker.sock`. | Rebuild.                         |
+| `.git/hooks/*` or `core.hooksPath`                            | Any command.                                                   | Commit from the host.               |
+| `.vscode/tasks.json` with `runOptions.runOn: folderOpen`      | Any command.                                                   | Accept the prompt about automatic tasks. |
+| A `vscode-local:` file URI                                    | A host file shows on screen, such as `~/.ssh/id_ed25519`.      | Nothing, but the container gets no copy. |
+
+**Every route in that table works without the `code` CLI channel.** It fires the next time that you
+run `git` in the folder, open the folder in a local window, or rebuild. A shell prompt that shows
+git status is enough for `core.fsmonitor`. The channel changes "the next time you do something" into
+"now".
+
+What reduces the risk:
+
+1. Keep your source in a container volume, not in a bind mount. Use **Dev Containers: Clone
+   Repository in Container Volume**. Then no host tool reads a file that the container wrote.
+2. If you keep the bind mount, do not run `git` or VS Code on the host in that folder while an agent
+   works in the container.
+3. Before you rebuild, run `git diff .devcontainer/` and read `.git/config`.
+4. On the host, trust single project folders, not a parent folder such as `~/projects`. Every folder
+   under a trusted folder is trusted, so any of them is a target for the `open` request.
+
+## Rootless Docker and Podman
+
+**The blocks work.** Each one is a `chown root` and a `chmod 000` **inside** the container, and
+inside a rootless container root is still root. It owns the user namespace that the container runs
+in. The removal of `sudo` works for the same reason. Nothing in this feature asks the host for a
+capability.
+
+**You still need the feature.** Under a rootless runtime, a program that breaks out of the container
+lands on your normal host account and not on host root. That closes one route. It does not change
+this one: VS Code still forwards your SSH agent, your GPG agent, your display and your GitHub token
+into the container, and those sockets answer any program in it.
+
+Two things to check on your host:
+
+- **The `userns` flag.** Podman with `--userns=keep-id` maps your host UID into the container and
+  renumbers the other users. The blocks expect a mapped root. Build one container with the exact
+  flag that you plan to use, then read `/var/log/devcontainer/sandbox.log` and make sure that each
+  block reports success.
+- **SELinux.** On Fedora and RHEL, the runtime labels a socket that VS Code forwards through a bind
+  mount. The feature leaves a bind mount alone and says so in the log, so SELinux changes the
+  report and not the behavior.
 
 
 ---

@@ -2,7 +2,7 @@
   "id": "persist-homedir",
   "version": "1.2.0",
   "name": "Persistent home directory (nshafer)",
-  "description": "Keeps /home and the VS Code server on separate named volumes, so both survive a rebuild but the server volume can be pruned on its own.",
+  "description": "Keeps /home and the VS Code server on Docker named volumes, so both survive a container rebuild. The server has its own volume, so you can delete it alone.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/persist-homedir",
   "options": {},
   "mounts": [

@@ -2,43 +2,43 @@
   "id": "sandbox",
   "version": "3.0.0",
   "name": "Sandbox (nshafer)",
-  "description": "Seals the host sockets VS Code forwards into a dev container - SSH agent, GPG agent, X11 and the Dev Containers extension IPC - and takes away the remote user's blanket sudo grant so the seals cannot simply be undone. Mitigation, not a boundary: the socket must exist for the container to attach, so there is a short window at each attach. See the README.",
+  "description": "Blocks the host channels that VS Code forwards into a dev container: the SSH agent, the GPG agent, the X11 display, the git credentials and the Dev Containers extension socket. Also removes sudo from the remote user, so a program in the container cannot open the channels again. This is a mitigation, not a security boundary.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/sandbox",
   "options": {
     "blockSshAgent": {
       "type": "boolean",
       "default": true,
-      "description": "Block the forwarded SSH agent (/tmp/vscode-ssh-auth-*.sock). Your host SSH keys stop being usable from inside, so git over SSH stops working there."
+      "description": "Block the forwarded SSH agent (/tmp/vscode-ssh-auth-*.sock). Git over SSH with your host keys then fails in the container."
     },
     "blockGpgAgent": {
       "type": "boolean",
       "default": true,
-      "description": "Block the forwarded GPG agent (~/.gnupg/S.gpg-agent, .extra and S.keyboxd), by sealing the sockets just after VS Code creates them. Signed commits stop working inside the container."
+      "description": "Block the forwarded GPG agent (~/.gnupg/S.gpg-agent, .extra and S.keyboxd). Signed commits with your host keys then fail in the container."
     },
     "blockX11": {
       "type": "boolean",
       "default": true,
-      "description": "Block the forwarded display (/tmp/.X11-unix/X*). The socket is sealed just after VS Code creates it, not pre-empted -- pre-empting it stops the container attaching at all. GUI apps stop reaching your desktop. Wayland cannot be blocked from inside - see the README."
+      "description": "Block the forwarded X11 display (/tmp/.X11-unix/X*). GUI apps in the container then cannot open a window on your desktop. Wayland cannot be blocked from inside the container. Read the README."
     },
     "blockCodeCli": {
       "type": "boolean",
       "default": false,
-      "description": "Block the 'code' CLI channel (vscode-ipc-*.sock). Off by default because sealing it stops the container attaching: the VS Code server unlinks that path when it disposes the hook, a root-owned tombstone makes that throw EPERM, and the window sits on 'Configuring Dev Container' for good. What it grants while open: a local VS Code window on any host path (an open request with a vscode-local: URI), extension installs into the container, and 'code --openExternal <uri>', which hands a URI to your host. The host drops file: URIs, asks before it opens http and https, and opens every other scheme with its registered app and no prompt. Turn it on only if you accept the attach failure."
+      "description": "Block the 'code' CLI socket (vscode-ipc-*.sock). Off by default, because a block on this socket stops the container from attaching: the VS Code server deletes the path when it shuts the channel down, and a file that root owns makes the delete fail. While the channel is open, a program in the container can open a VS Code window on any host path, install extensions, and give a URI to an app on your host. Turn it on only if you accept that the container does not attach."
     },
     "blockGitAskpass": {
       "type": "boolean",
       "default": true,
-      "description": "Block the git credential channel (vscode-git-*.sock, reached through GIT_ASKPASS). On by default, together with blockExtensionIpc, so no host credential is reachable from the container. The cost is real: git push, pull and fetch over HTTPS stop working, in the VS Code UI and in the terminal. Authenticate some other way - 'gh auth login' inside the container, or a token in the container's own credential store. Set it to false to get the host token back."
+      "description": "Block the git credential socket (vscode-git-*.sock, reached through GIT_ASKPASS). On by default, together with blockExtensionIpc, so no host credential is reachable from the container. Git push, pull and fetch over HTTPS then fail, in the VS Code interface and in the terminal. Run 'gh auth login' in the container to get a login of its own. Set this to false to use the token of your host instead."
     },
     "blockExtensionIpc": {
       "type": "boolean",
       "default": true,
-      "description": "Block the Dev Containers extension channel (vscode-remote-containers-ipc-*.sock). An HTTP POST on it calls rpc on the extension running on your host, and git uses it as credential.helper - so it answers for every host in your host's credential store, with no prompt. Blocking it costs the host credential helper and host docker registry logins. blockGitAskpass seals the other credential path, so both are shut by default and a push over HTTPS needs a credential of its own."
+      "description": "Block the Dev Containers extension socket (vscode-remote-containers-ipc-*.sock). The socket answers for every host in the credential store of your host, with no prompt, and git uses it as credential.helper. A block also costs your host Docker registry logins."
     },
     "scrubEnv": {
       "type": "boolean",
       "default": true,
-      "description": "Also unset the variables that advertise the blocked sockets (SSH_AUTH_SOCK, DISPLAY, GIT_ASKPASS, BROWSER, VSCODE_IPC_HOOK_CLI, REMOTE_CONTAINERS_*) in every shell. Only for the channels that are actually blocked - unsetting the variable for an open channel would break it. Cosmetic next to the socket blocks, since VS Code re-injects them, but it stops tools finding the paths by accident."
+      "description": "Unset the variables that name the blocked sockets (SSH_AUTH_SOCK, DISPLAY, GIT_ASKPASS, BROWSER, VSCODE_IPC_HOOK_CLI, REMOTE_CONTAINERS_*) in every shell. Only for the channels that are blocked. This is not a control, because VS Code sets them again, but it stops a tool from finding a path by accident."
     },
     "sweepInterval": {
       "type": "string",
@@ -47,7 +47,7 @@
         "1",
         "5"
       ],
-      "description": "Seconds between backstop sweeps. Sealing is normally driven by inotify, within about a millisecond of a socket appearing; this poll only catches what inotify missed, so it rarely needs changing."
+      "description": "Seconds between the backup scans for new sockets. inotify seals a socket about a millisecond after it appears, so this poll catches only what inotify missed."
     },
     "sudoMode": {
       "type": "string",
@@ -57,17 +57,17 @@
         "restricted",
         "keep"
       ],
-      "description": "What happens to the remote user's sudo grant. 'drop' removes it and everything that could restore it - the default, and the only mode where every seal in this feature holds. 'restricted' removes the blanket grant and replaces it with the linted allowlist in sudoCommands. 'keep' changes nothing, which makes this whole feature decoration. Named sudoMode and not sudo because a feature option becomes an image environment variable, and a container-wide SUDO=drop breaks the common '$SUDO apt-get install' idiom."
+      "description": "What happens to the sudo grant of the remote user. 'drop' removes it, and removes everything that could restore it. This is the default, and the only mode where every block holds. 'restricted' removes the blanket grant and installs the checked list in sudoCommands. 'keep' changes nothing, which leaves this feature with nothing to protect. The name is sudoMode and not sudo, because a feature option becomes an environment variable in the image, and SUDO=drop would break the common '$SUDO apt-get install' pattern."
     },
     "sudoCommands": {
       "type": "string",
       "default": "",
-      "description": "Commands the remote user may run as root when sudoMode is restricted, comma separated, each an absolute path with its arguments pinned: '/bin/systemctl restart myapp,/usr/sbin/nginx -s reload'. Every entry is linted at build time and the build fails on a route back to full root - a shell, an interpreter, a wildcard, an unpinned package manager, a firewall tool, a user-writable binary. This list becomes the trust boundary of the feature. See the README."
+      "description": "The commands that the remote user can run as root when sudoMode is 'restricted', comma separated. Each one needs an absolute path and exact arguments: '/bin/systemctl restart myapp,/usr/sbin/nginx -s reload'. The build checks each entry and fails on a route back to full root, such as a shell, an interpreter, a wildcard, a package manager with no arguments, a firewall tool, or a program that the remote user can write. This list becomes the trust boundary of the feature. Read the README."
     },
     "sudoAllowUnsafe": {
       "type": "boolean",
       "default": false,
-      "description": "Install the sudoCommands allowlist even when the lint rejects an entry. Off by default, and the build fails instead. Turn it on only after you have read each finding and decided it is wrong or acceptable - the findings are routes from an allowed command back to full root, not style notes."
+      "description": "Install the sudoCommands list even when the check rejects an entry. Off by default, and the build fails instead. Turn it on only after you read each finding and decided that it is acceptable."
     }
   },
   "entrypoint": "/usr/local/share/devcontainer/sandbox/entrypoint.sh",

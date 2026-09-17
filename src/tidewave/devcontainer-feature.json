@@ -2,7 +2,7 @@
   "id": "tidewave",
   "version": "1.2.1",
   "name": "Tidewave (nshafer)",
-  "description": "Installs the Tidewave CLI at build time and starts it on every container start, so the Tidewave app on the host can drive the project inside the container.",
+  "description": "Installs the Tidewave CLI when the image builds, and starts it at each container start, so the Tidewave app on your host can work with the project in the container.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/tidewave",
   "options": {
     "version": {
@@ -11,7 +11,7 @@
       "proposals": [
         "latest"
       ],
-      "description": "Version to install: 'latest', or an exact X.Y.Z matching a tidewave_app release tag."
+      "description": "The version to install: 'latest', or an exact X.Y.Z that matches a tidewave_app release tag."
     },
     "port": {
       "type": "string",
@@ -20,22 +20,22 @@
         "9000",
         "9832"
       ],
-      "description": "Port the CLI listens on inside the container. It has to be published to the identical port number on the host -- the CLI rejects a request whose Origin names a different port -- so add \"appPort\": [\"127.0.0.1:9000:9000\"] to devcontainer.json."
+      "description": "The port that the CLI listens on in the container. Publish the same port number on the host, with \"appPort\": [\"127.0.0.1:9000:9000\"]. The CLI refuses a request whose Origin names another port."
     },
     "allowRemoteAccess": {
       "type": "boolean",
       "default": true,
-      "description": "Pass --allow-remote-access, which binds 0.0.0.0 instead of 127.0.0.1. Required for a published port to reach it: Docker forwards to the container's bridge address, not to its loopback. The CLI still rejects requests whose Origin is not localhost."
+      "description": "Listen on every address in the container, not on 127.0.0.1 only. A published port needs this, because Docker sends it to the bridge address of the container. The CLI still refuses a request whose Origin is not localhost."
     },
     "debug": {
       "type": "boolean",
       "default": false,
-      "description": "Pass --debug, which makes the CLI log what it does to /tmp/tidewave.log. Off by default, because a healthy run is silent and the log is only read when something failed."
+      "description": "Write what the CLI does to /tmp/tidewave.log. Off by default, because a healthy run is silent."
     },
     "autostart": {
       "type": "boolean",
       "default": true,
-      "description": "Start the CLI at postStart. Turn off to install the binary only and run 'tidewave' yourself."
+      "description": "Start the CLI at each container start. Turn it off to install the program only, and run 'tidewave' yourself."
     }
   },
   "postStartCommand": "/usr/local/share/devcontainer/tidewave/post-start.sh",

@@ -2,7 +2,7 @@
   "id": "git-config",
   "version": "2.0.0",
   "name": "Git config (nshafer)",
-  "description": "Copies the host's git configuration and excludes file into the container, from git's XDG config directory, in every container - including the ones the CLI creates, which copy nothing.",
+  "description": "Copies your git config and global ignore file from the host into the container when the container is created. Works in a container from the devcontainer CLI too, which copies nothing by itself.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/git-config",
   "options": {},
   "postCreateCommand": "/usr/local/share/devcontainer/git-config/post-create.sh",
