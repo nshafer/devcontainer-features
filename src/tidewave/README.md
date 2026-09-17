@@ -31,9 +31,10 @@ things yourself.
 
 ### 1. Set `TIDEWAVE_HOST_PATH` on the host
 
-Set it to the path of your project on the host, in the environment that starts VS Code. The CLI
-uses this path when it opens a file in your editor. Without it, the CLI gives your editor paths from
-inside the container, and the editor cannot open them.
+Set it to the path of your project on the host, in the environment that starts VS Code. The CLI uses
+this path when it opens a file in your editor. Without it, the CLI gives your editor paths from
+inside the container, and the editor cannot open them. I suggest tools that can set environment
+variables in your project directory, such as `mise` or `direnv`.
 
 ### 2. Add the feature, the port and the variable to `devcontainer.json`
 
@@ -122,7 +123,8 @@ rebuild.
   CLI. A program on your host can send any `Origin` header, so it can connect.
 - **Without `127.0.0.1:` in `appPort`, the port is open to your network.**
 - **The first run needs network access.** The CLI downloads Bun. With
-  [`egress-filter`](../egress-filter), run `egress-denied` to see which hosts to allow.
+  [`egress-filter`](../egress-filter), enable the `tidewave` preset or run `egress-denied` to see
+  which hosts to allow.
 
 
 ---

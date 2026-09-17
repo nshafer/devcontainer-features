@@ -129,8 +129,9 @@ The feature copies no credentials. What you get depends on how you start the con
 ## Why use this when VS Code already copies git config
 
 VS Code copies your git config when it starts a container, if `dev.containers.copyGitConfig` is on.
-The `devcontainer` CLI does not. A container from `devcontainer up`, or from CI, has no git name
-and email without this feature.
+It does not copy the default global ignore file `~/.config/git/ignore`. Also, the `devcontainer` CLI
+does not. A container from `devcontainer up`, or from CI, has no git name and email without this
+feature.
 
 ## Why you add the mount
 

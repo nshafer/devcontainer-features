@@ -1,7 +1,7 @@
 
 # Egress filter (nshafer) (egress-filter)
 
-Blocks all outbound network traffic from the container, except to the hosts on an allowlist. A firewall in the container is the control, so a program that ignores HTTP_PROXY cannot connect either. A proxy is the policy, so the lists hold host names and there is no TLS interception. The allowlist merges a global list on your host, a list in the repository, the options here, and a baseline that keeps VS Code working. Containers that an inner Docker daemon starts are filtered too.
+Blocks all outbound network traffic from the container, except to the hosts on an allowlist. A firewall in the container enforces control, so a program that ignores HTTP_PROXY cannot connect either. A proxy enforces policy, so the lists hold host names and there is no TLS interception. The allowlist merges a global list on your host, a list in the repository, the options here, and a baseline that keeps VS Code working. Containers that an inner Docker daemon starts are filtered too.
 
 ## Example Usage
 
@@ -32,18 +32,18 @@ Blocks all outbound network traffic from the container, except to the hosts on a
 The container can reach the hosts that you allow. Every other outbound connection fails. Two parts
 work together:
 
-- **A firewall is the control.** `iptables` rejects all outbound traffic, except loopback,
+- **A firewall enforces control.** `iptables` rejects all outbound traffic, except loopback,
   established connections, DNS, and traffic from one user: the proxy. No program that the agent
   runs has that user ID, so no traffic leaves the container except through the proxy. The feature
   sets `HTTP_PROXY` as a convenience. A tool that ignores it gets a rejected connection, not a way
   around the filter.
-- **A proxy is the policy.** The proxy reads the host name in each request and compares it with the
+- **A proxy enforces policy.** The proxy reads the host name in each request and compares it with the
   allowlist. So your lists hold host names, not IP addresses. **The proxy does not read your HTTPS
   traffic, and you do not install a certificate.**
 
 A change to a list is a proxy reload. The firewall does not change, so nothing is open while you
 edit. The proxy is closed for a fraction of a second during the reload, and a request in that
-moment is refused. That is the right direction for a filter.
+moment is refused.
 
 > **Note:** Use this feature together with [`sandbox`](../sandbox). A remote user with `sudo` runs
 > `iptables -F` and the whole filter is gone.
@@ -109,8 +109,9 @@ Skip this step for VS Code. The feature writes the proxy variables to `/etc/prof
 `/etc/environment`. VS Code reads them with its environment probe and applies them to the extension
 host. Every extension and every terminal then has the proxy.
 
-Add this block when something starts a process with a plain `docker exec` from outside VS Code: a
-CI step, a script, or `devc exec sh`. Such a process reads neither file, so it gets no proxy, and
+Add this block when something starts a process with a plain `docker exec` from outside VS Code: a CI
+step, a script, or `devc exec sh`. Login shells work, such as `devc exec bash` since they read
+`/etc/profile.d` and `/etc/environment`. Such a process reads neither file, so it gets no proxy, and
 the firewall rejects every connection that it makes. Put the block in `devcontainer.json`, next to
 `mounts`. It works in a Compose project too.
 
@@ -127,12 +128,12 @@ the firewall rejects every connection that it makes. Put the block in `devcontai
 
 The block is the same on every machine. Two things in it follow an option:
 
-- **The port** follows `proxyPort`.
+- **The port** must match `proxyPort`.
 - **`NO_PROXY`** must repeat the names from the `noProxy` option. For `"noProxy": "db,redis"`,
   write `"localhost,127.0.0.1,::1,db,redis"`.
 
 No subnet is in `NO_PROXY`, because the proxy reaches the local subnets by address itself.
-`egress-status` names anything that the block misses. See
+`egress-status` lists anything that the block misses. See
 [Processes started by `docker exec`](#processes-started-by-docker-exec) for the detail.
 
 ### 4. Rebuild the container and check the result

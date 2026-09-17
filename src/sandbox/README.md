@@ -29,6 +29,13 @@ Blocks the host channels that VS Code forwards into a dev container: the SSH age
 
 ## The problem this feature solves
 
+VS Code's devcontainer feature was developed as a convenience for developers, it was never designed
+to work as a sandbox for potentially dangerous attacks we see in our modern development
+environments, such as supply chain attacks from malicious dependencies or rogue AI agents.
+
+**THIS DOES NOT SOLVE THE SECURITY PROBLEMS THAT VS CODE CREATES. IT SIMPLY MITIGATES THEM TO MAKE
+COMMON ATTACKS MORE DIFFICULT**
+
 When VS Code opens a dev container, it forwards a set of host channels into it. Each channel is a
 Unix socket inside the container that connects to a program on your host. They are useful:
 
@@ -41,11 +48,12 @@ The problem is that every program in the container can use these channels. A cod
 container can sign a commit with your key, push to any repository that your host token can reach,
 read your screen, or ask the VS Code extension on your host for a credential.
 
-This feature closes those channels, and it removes `sudo` from the remote user, so a program in the
-container cannot open them again.
+This feature closes most of those channels, and it removes `sudo` from the remote user, so a program
+in the container cannot open them again.
 
 > **Caution:** This feature is a mitigation, not a security boundary. There is a short time at each
-> attach when a channel is open. Read [Limits](#limits) before you trust it.
+> attach when a channel is open, as well as channels VS Code opens for convenience that can be
+> exploited. Read [Limits](#limits) before you trust it.
 
 ## What stops working
 
