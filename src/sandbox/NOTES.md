@@ -45,6 +45,10 @@ forwarded channels are host-side. Set these on any machine that runs an agent in
 
 - Run the agent as a different Unix user than the remote user, if you can. A second user cannot
   connect to a forwarded socket at all.
+- Keep the source in a container volume, not a bind mount, or do not run host tools in the
+  bind-mounted folder while an agent works. The container can write `.git/config` and
+  `.devcontainer/`, and host tools run what those files name. See
+  [The real risk: the workspace bind mount](#the-real-risk-the-workspace-bind-mount).
 
 The feature takes away the remote user's blanket sudo grant, which closes the hole that matters: a
 remote user who regains root undoes every seal. Add `no-new-privileges` yourself as a second lock —
@@ -89,7 +93,7 @@ container, not assumed. The extension writes the list into `REMOTE_CONTAINERS_SO
 | X11 | `/tmp/.X11-unix/X<n>` | `blockX11` | blocked | your desktop: keystrokes, screenshots |
 | extension IPC | `vscode-remote-containers-ipc-<uuid>.sock` | `blockExtensionIpc` | blocked | RPC to the extension on your host, including every credential your host stores |
 | git credentials | `$XDG_RUNTIME_DIR/vscode-git-<id>.sock` | `blockGitAskpass` | blocked | your GitHub token, via `GIT_ASKPASS` |
-| `code` CLI | `vscode-ipc-<uuid>.sock` | `blockCodeCli` | **open** | driving your editor, and opening a URI on your host desktop |
+| `code` CLI | `vscode-ipc-<uuid>.sock` | `blockCodeCli` | **open** | a local VS Code window on any host path, and a URI opened by an app on your host |
 | Wayland | `/tmp/vscode-wayland-<uuid>.sock` | none | open | your desktop — **a bind mount**, see below |
 
 This feature seals those sockets and removes the remote user's sudo grant, so the seals hold. One
@@ -104,7 +108,7 @@ server CLI in `~/.vscode-server/bin/<commit>/out/server-cli.js`:
 
 | Socket | Reaches the host? | What it grants | What blocking it breaks |
 | --- | --- | --- | --- |
-| `vscode-ipc-*.sock` | through the editor UI | four message types — `open`, `status`, `extensionManagement`, and `openExternal`, which opens any URI with your **host** desktop's handler | `code .`, `code --wait` as `core.editor`, **and the attach itself** |
+| `vscode-ipc-*.sock` | yes, through the editor UI | four message types — `open`, `status`, `extensionManagement` and `openExternal`. See [What the `code` CLI channel grants](#what-the-code-cli-channel-grants) | `code .`, `code --wait` as `core.editor`, **and the attach itself** |
 | `vscode-git-*.sock` | yes, through the git extension | your host's GitHub token, for a host name the caller picks. VS Code prompts only for a host it has no session for | `git push`, `pull` and `fetch` over HTTPS, in the UI and in the terminal |
 | `vscode-remote-containers-ipc-*.sock` | yes, directly | an HTTP `POST` on it calls `rpc` on the extension **on your host**. Git uses it as `credential.helper`, so it answers for every host in your host's credential store, with no prompt | the host credential helper, and host docker registry logins |
 
@@ -135,6 +139,110 @@ The window then sits on "Configuring Dev Container" for good, with an empty log.
 shape of failure as the 1.0.0 directory bug below, and it has the same root cause: a tombstone is
 permanent by design, so it cannot coexist with a component that unlinks and rebinds its own path.
 Nothing inside the container can fix it. `blockCodeCli` is there for anyone who accepts the cost.
+
+### What the `code` CLI channel grants
+
+Read from the VS Code source: the CLI server in the extension host, and
+`src/vs/workbench/api/browser/mainThreadCLICommands.ts` on the host side. The `open` result below is
+also tested, on VS Code 1.137.0. Anything that runs as the
+remote user can send these four messages. It does not need the `code` command. A `POST` to the
+socket is enough.
+
+**`openExternal`** hands a URI to your host. The flag is `code --openExternal`, and `$BROWSER`
+calls it. `--open-external` is not a known option, so the CLI ignores it. What happens next depends
+on the URI scheme:
+
+| Scheme | Result |
+| --- | --- |
+| `file:` | The server in the container drops it. Nothing reaches the host. |
+| `http:`, `https:` | The host asks "Do you want Code to open the external website?" It does not ask for a domain in `workbench.trustedDomains`. |
+| any other scheme | The host opener passes it to the operating system with no prompt. The app registered for the scheme opens it: `mailto:`, `vscode:`, or any scheme an installed app claims. |
+
+The risk is the last row. The attacker chooses the scheme and the whole URI, and no prompt shows.
+
+**`extensionManagement`** installs, removes and lists extensions. The host sends the request to the
+*remote* extension service only, so the extension goes into `~/.vscode-server/extensions` and runs
+in the container extension host, as the remote user. The host refuses an extension that can only
+run in the UI. The install is machine-scoped, so Settings Sync does not copy it to your other
+machines. An installed extension still gets the full VS Code API, and part of that API reaches
+your host UI: `env.openExternal`, commands, and `authentication.getSession`, which prompts. The
+socket is not the only route to this. The remote user owns `~/.vscode-server/extensions` and can
+write an extension into it directly.
+
+**`status`** returns the diagnostics text that "Help: Report Issue" collects.
+
+**`open`** opens files and folders in a VS Code window, and it is the most serious of the four.
+The request names its own `remoteAuthority`, so a `null` there asks the host for a **local** window.
+The path has to use the `vscode-local:` scheme. Every URI that leaves the extension host goes
+through `src/vs/base/common/uriTransformer.ts`, which rewrites `file:` into a path in the container
+and `vscode-local:` into `file:` on the host. This request, sent from the container, opens a new
+local window on the host folder:
+
+```sh
+curl --noproxy '*' --unix-socket "$VSCODE_IPC_HOOK_CLI" -H 'Content-Type: application/json' \
+    -d '{"type":"open","folderURIs":["vscode-local:/host/path"],"forceNewWindow":true,"remoteAuthority":null}' \
+    http://localhost/
+```
+
+In the test, the window opened with no workspace trust prompt. The folder was inside a project that
+the host already trusted, and a trusted parent folder makes its subfolders trusted too. The git
+extension on the host then offered to open the parent repository.
+
+The container cannot read anything back this way. The response is `null`. But the path can be any
+folder or file on the host, and the window runs your host extensions against it. The next section
+says why that is enough to run a command on the host.
+
+### The real risk: the workspace bind mount
+
+A process in the container can run a command on your host, as your host user, with no click. The
+`code` CLI channel is not the root cause. The root cause is the workspace bind mount: host tools
+read files that the container can write. The channel only lets the attacker choose the moment.
+
+**The zero-click chain.**
+
+1. The attacker writes one setting into `.git/config` in the workspace:
+
+   ```ini
+   [core]
+       fsmonitor = "sh -c 'any command here' #"
+   ```
+
+   On Linux, Dev Containers gives the container user the same UID as your host user. So git on
+   the host sees a repository that you own, and it trusts the config.
+2. The attacker sends the `open` request above for the repository root, with a `vscode-local:` URI.
+3. A local window opens. The folder is trusted, so the git extension on the host opens the
+   repository and runs `git status`. It asks first only for a repository in a *parent* folder.
+4. `git status` runs the `core.fsmonitor` command on the host.
+
+Step 4 is tested: `git status` in git 2.55.0 runs the command. The git extension in VS Code 1.137.0
+has no reference to `fsmonitor`, so it does not block it. The full chain is not tested on a host.
+
+**Other routes, and what each one needs from you.**
+
+| Route | What runs on the host | What you must do |
+| --- | --- | --- |
+| `core.fsmonitor` in `.git/config` | any command | nothing |
+| `initializeCommand` in `.devcontainer/devcontainer.json` | any command | click "Reopen in Container", or rebuild |
+| `mounts` or `runArgs` in `devcontainer.json` | a container with your host home or `/var/run/docker.sock` | rebuild |
+| `.git/hooks/*` or `core.hooksPath` | any command | commit from the host |
+| `.vscode/tasks.json` with `runOptions.runOn: folderOpen` | any command | accept the automatic tasks prompt |
+| a `vscode-local:` file URI | a host file shows on screen, for example `~/.ssh/id_ed25519` | nothing, but the container gets no copy |
+
+**Without the channel,** every route in that table still works. It fires the next time you run
+`git` in the folder, open the folder in a local window, or rebuild. A shell prompt that shows git
+status is enough for `core.fsmonitor`. The channel changes "the next time you do something" into
+"now". Nothing inside the container can close the channel, for the reason in the section on
+`vscode-ipc-*.sock` above.
+
+**What reduces the risk.**
+
+1. Keep the source in a container volume, not a bind mount. "Dev Containers: Clone Repository in
+   Container Volume" does this. Then no host tool reads a file that the container wrote.
+2. If you keep the bind mount, do not run `git` or VS Code on the host in that folder while an
+   agent works in the container.
+3. Before you rebuild, run `git diff .devcontainer/` and read `.git/config`.
+4. On the host, trust single project folders, not a parent such as `~/projects`. A trusted parent
+   makes every folder under it trusted, so any of them is a trusted target for the `open` request.
 
 ### Two paths ask for a credential, not one
 

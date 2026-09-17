@@ -23,7 +23,7 @@
     "blockCodeCli": {
       "type": "boolean",
       "default": false,
-      "description": "Block the 'code' CLI channel (vscode-ipc-*.sock). Off by default because sealing it stops the container attaching: the VS Code server unlinks that path when it disposes the hook, a root-owned tombstone makes that throw EPERM, and the window sits on 'Configuring Dev Container' for good. What it grants while open: driving the editor, and opening any URI with your host desktop's handler ('code --open-external'). Turn it on only if you accept the attach failure."
+      "description": "Block the 'code' CLI channel (vscode-ipc-*.sock). Off by default because sealing it stops the container attaching: the VS Code server unlinks that path when it disposes the hook, a root-owned tombstone makes that throw EPERM, and the window sits on 'Configuring Dev Container' for good. What it grants while open: a local VS Code window on any host path (an open request with a vscode-local: URI), extension installs into the container, and 'code --openExternal <uri>', which hands a URI to your host. The host drops file: URIs, asks before it opens http and https, and opens every other scheme with its registered app and no prompt. Turn it on only if you accept the attach failure."
     },
     "blockGitAskpass": {
       "type": "boolean",
