@@ -26,10 +26,10 @@ check "defaults were baked in" bash -c '
     [ "$BLOCK_GPG" = true ] || { echo "gpg: $BLOCK_GPG"; exit 1; }
     [ "$BLOCK_X11" = true ] || { echo "x11: $BLOCK_X11"; exit 1; }
     [ "$BLOCK_EXT_IPC" = true ] || { echo "extensionIpc: $BLOCK_EXT_IPC"; exit 1; }
-    # The two that ship off. Asserted as false rather than left out, because turning either one on
-    # by default is the change that breaks the attach or breaks git push.
+    [ "$BLOCK_GIT_ASKPASS" = true ] || { echo "gitAskpass: $BLOCK_GIT_ASKPASS"; exit 1; }
+    # The one that ships off. Asserted as false rather than left out, because turning it on by
+    # default is the change that breaks the attach.
     [ "$BLOCK_CODE_CLI" = false ] || { echo "codeCli: $BLOCK_CODE_CLI"; exit 1; }
-    [ "$BLOCK_GIT_ASKPASS" = false ] || { echo "gitAskpass: $BLOCK_GIT_ASKPASS"; exit 1; }
     [ "$USERNAME" = "$(whoami)" ] || { echo "user: $USERNAME vs $(whoami)"; exit 1; }'
 
 # ---------------------------------------------------------------------------------------------
@@ -138,7 +138,7 @@ check "the remote-containers ipc socket is swept" bash -c '
     wait-sealed /tmp/vscode-remote-containers-ipc-x.sock || { echo "not sealed"; exit 1; }'
 
 # ---------------------------------------------------------------------------------------------
-# The two channels that ship open, and why each one does.
+# The one channel that ships open, and why it does.
 #
 # vscode-ipc-*.sock is not only the `code` CLI. The VS Code server registers its own channels on
 # one of those paths and unlinks the file when it disposes the hook -- with no try around it. A
@@ -151,8 +151,9 @@ check "the remote-containers ipc socket is swept" bash -c '
 # socket is sealed. It is that the remote user can still create one AND remove it again, which is
 # exactly what the server has to be able to do.
 #
-# vscode-git-*.sock is the GIT_ASKPASS channel. Sealed, git push and pull fail in the VS Code UI
-# with "Missing or invalid credentials".
+# vscode-git-*.sock is the GIT_ASKPASS channel, and it is sealed on the defaults as of 3.0. That
+# costs git push and pull over HTTPS, which then fail with "Missing or invalid credentials" -- the
+# price of no host credential being reachable. It is exercised open by the channels_off scenario.
 # ---------------------------------------------------------------------------------------------
 
 check "a vscode-ipc socket is left alone, so the window can finish attaching" bash -c '
@@ -164,14 +165,11 @@ check "a vscode-ipc socket is left alone, so the window can finish attaching" ba
         || { echo "the remote user could not remove its own socket"; exit 1; }
     echo "  created and removed by $(whoami), which is what VS Code does"'
 
-check "a git askpass socket is left alone, so git push works" bash -c '
+check "a git askpass socket is sealed on the defaults" bash -c '
     sock-bind /tmp/vscode-git-default.sock
-    sleep 3
-    mode=$(stat -c %a /tmp/vscode-git-default.sock); echo "  mode $mode"
-    [ "$mode" != 0 ] || { echo "sealed despite blockGitAskpass=false"; exit 1; }
-    [ "$(stat -c %U /tmp/vscode-git-default.sock)" = "$(whoami)" ] \
-        || { echo "taken by root despite blockGitAskpass=false"; exit 1; }
-    echo "  left reachable, as configured"'
+    wait-sealed /tmp/vscode-git-default.sock \
+        || { echo "not sealed despite blockGitAskpass=true"; exit 1; }
+    ls -l /tmp/vscode-git-default.sock'
 
 # ---------------------------------------------------------------------------------------------
 # The forwarding manifest. VS Code declares what it forwarded in REMOTE_CONTAINERS_SOCKETS, so a
@@ -189,11 +187,11 @@ check "check-manifest passes when the declared channels are sealed" bash -c '
 # A path whose own option is off is not a finding. Without this, every attach warns about a socket
 # the configuration leaves open on purpose, and a warning that is always there is one nobody reads.
 check "check-manifest stays quiet about a channel whose option is off" bash -c '
-    sock-bind /tmp/vscode-git-declared.sock
+    sock-bind /tmp/vscode-ipc-declared.sock
     sleep 2
-    out=$(REMOTE_CONTAINERS_SOCKETS='"'"'["/tmp/vscode-git-declared.sock"]'"'"' \
+    out=$(REMOTE_CONTAINERS_SOCKETS='"'"'["/tmp/vscode-ipc-declared.sock"]'"'"' \
         /usr/local/share/devcontainer/sandbox/sandbox.sh check-manifest 2>&1) \
-        || { echo "warned about a channel blockGitAskpass=false leaves open:"; echo "$out"; exit 1; }
+        || { echo "warned about a channel blockCodeCli=false leaves open:"; echo "$out"; exit 1; }
     echo "$out" | grep -q "every channel VS Code declared is sealed"'
 
 check "check-manifest reports a declared channel the globs do not cover" bash -c '
@@ -270,8 +268,8 @@ check "sandbox-status reports each channel as configured" bash -c '
     sandbox-status | grep -qE "gpg agent +blocked"
     sandbox-status | grep -qE "x11 display +blocked"
     sandbox-status | grep -qE "extension ipc +blocked"
+    sandbox-status | grep -qE "git askpass +blocked"
     sandbox-status | grep -qE "code cli +not blocked \(option is off\)"
-    sandbox-status | grep -qE "git askpass +not blocked \(option is off\)"
     sandbox-status | grep -qE "sudo +dropped"'
 
 # ---------------------------------------------------------------------------------------------
@@ -288,18 +286,18 @@ check "the scrub is wired into /etc, never \$HOME" bash -c '
     ! grep -q devcontainer/sandbox "$HOME/.bashrc" 2>/dev/null'
 
 check "an interactive bash has the blocked channels scrubbed" bash -c '
-    out=$(SSH_AUTH_SOCK=/tmp/x.sock DISPLAY=:9 REMOTE_CONTAINERS_IPC=/tmp/e.sock \
-        bash -ic "echo ssh=[\$SSH_AUTH_SOCK] display=[\$DISPLAY] ext=[\$REMOTE_CONTAINERS_IPC]" 2>/dev/null)
-    echo "$out" | grep -q "ssh=\[\] display=\[\] ext=\[\]"'
+    out=$(SSH_AUTH_SOCK=/tmp/x.sock DISPLAY=:9 REMOTE_CONTAINERS_IPC=/tmp/e.sock GIT_ASKPASS=/tmp/a.sh \
+        bash -ic "echo ssh=[\$SSH_AUTH_SOCK] display=[\$DISPLAY] ext=[\$REMOTE_CONTAINERS_IPC] askpass=[\$GIT_ASKPASS]" 2>/dev/null)
+    echo "$out" | grep -q "ssh=\[\] display=\[\] ext=\[\] askpass=\[\]"'
 
 # The other half of the same rule, and the one that used to be wrong. Unsetting the variable for a
 # channel this feature leaves open does not harden anything -- it breaks it. A terminal with no
-# GIT_ASKPASS cannot authenticate a push however reachable the socket is.
+# VSCODE_IPC_HOOK_CLI has no working `code` however reachable the socket is.
 check "an open channel keeps the variable that makes it work" bash -c '
-    out=$(GIT_ASKPASS=/tmp/a.sh VSCODE_IPC_HOOK_CLI=/tmp/i.sock \
-        bash -ic "echo askpass=[\$GIT_ASKPASS] ipc=[\$VSCODE_IPC_HOOK_CLI]" 2>/dev/null)
+    out=$(VSCODE_IPC_HOOK_CLI=/tmp/i.sock \
+        bash -ic "echo ipc=[\$VSCODE_IPC_HOOK_CLI]" 2>/dev/null)
     echo "$out"
-    echo "$out" | grep -q "askpass=\[/tmp/a.sh\] ipc=\[/tmp/i.sock\]"'
+    echo "$out" | grep -q "ipc=\[/tmp/i.sock\]"'
 
 check "a login shell has them scrubbed" bash -c '
     out=$(SSH_AUTH_SOCK=/tmp/x.sock bash -lc "echo ssh=[\$SSH_AUTH_SOCK]" 2>/dev/null)

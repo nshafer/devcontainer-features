@@ -7,7 +7,7 @@ Seals the host sockets VS Code forwards into a dev container - SSH agent, GPG ag
 
 ```json
 "features": {
-    "ghcr.io/nshafer/devcontainer-features/sandbox:2": {}
+    "ghcr.io/nshafer/devcontainer-features/sandbox:3": {}
 }
 ```
 
@@ -19,13 +19,26 @@ Seals the host sockets VS Code forwards into a dev container - SSH agent, GPG ag
 | blockGpgAgent | Block the forwarded GPG agent (~/.gnupg/S.gpg-agent, .extra and S.keyboxd), by sealing the sockets just after VS Code creates them. Signed commits stop working inside the container. | boolean | true |
 | blockX11 | Block the forwarded display (/tmp/.X11-unix/X*). The socket is sealed just after VS Code creates it, not pre-empted -- pre-empting it stops the container attaching at all. GUI apps stop reaching your desktop. Wayland cannot be blocked from inside - see the README. | boolean | true |
 | blockCodeCli | Block the 'code' CLI channel (vscode-ipc-*.sock). Off by default because sealing it stops the container attaching: the VS Code server unlinks that path when it disposes the hook, a root-owned tombstone makes that throw EPERM, and the window sits on 'Configuring Dev Container' for good. What it grants while open: driving the editor, and opening any URI with your host desktop's handler ('code --open-external'). Turn it on only if you accept the attach failure. | boolean | false |
-| blockGitAskpass | Block the git credential channel (vscode-git-*.sock, reached through GIT_ASKPASS). Off by default because blocking it stops git push, pull and fetch over HTTPS, in the VS Code UI and in the terminal. What it grants while open: the host's GitHub token, to anything in the container that connects to the socket. Turn it on if no host credential should be reachable, and authenticate some other way. | boolean | false |
-| blockExtensionIpc | Block the Dev Containers extension channel (vscode-remote-containers-ipc-*.sock). An HTTP POST on it calls rpc on the extension running on your host, and git uses it as credential.helper - so it answers for every host in your host's credential store, with no prompt. Blocking it costs the host credential helper and host docker registry logins. Push and pull still work through blockGitAskpass. | boolean | true |
+| blockGitAskpass | Block the git credential channel (vscode-git-*.sock, reached through GIT_ASKPASS). On by default, together with blockExtensionIpc, so no host credential is reachable from the container. The cost is real: git push, pull and fetch over HTTPS stop working, in the VS Code UI and in the terminal. Authenticate some other way - 'gh auth login' inside the container, or a token in the container's own credential store. Set it to false to get the host token back. | boolean | true |
+| blockExtensionIpc | Block the Dev Containers extension channel (vscode-remote-containers-ipc-*.sock). An HTTP POST on it calls rpc on the extension running on your host, and git uses it as credential.helper - so it answers for every host in your host's credential store, with no prompt. Blocking it costs the host credential helper and host docker registry logins. blockGitAskpass seals the other credential path, so both are shut by default and a push over HTTPS needs a credential of its own. | boolean | true |
 | scrubEnv | Also unset the variables that advertise the blocked sockets (SSH_AUTH_SOCK, DISPLAY, GIT_ASKPASS, BROWSER, VSCODE_IPC_HOOK_CLI, REMOTE_CONTAINERS_*) in every shell. Only for the channels that are actually blocked - unsetting the variable for an open channel would break it. Cosmetic next to the socket blocks, since VS Code re-injects them, but it stops tools finding the paths by accident. | boolean | true |
 | sweepInterval | Seconds between backstop sweeps. Sealing is normally driven by inotify, within about a millisecond of a socket appearing; this poll only catches what inotify missed, so it rarely needs changing. | string | 1 |
 | sudoMode | What happens to the remote user's sudo grant. 'drop' removes it and everything that could restore it - the default, and the only mode where every seal in this feature holds. 'restricted' removes the blanket grant and replaces it with the linted allowlist in sudoCommands. 'keep' changes nothing, which makes this whole feature decoration. Named sudoMode and not sudo because a feature option becomes an image environment variable, and a container-wide SUDO=drop breaks the common '$SUDO apt-get install' idiom. | string | drop |
 | sudoCommands | Commands the remote user may run as root when sudoMode is restricted, comma separated, each an absolute path with its arguments pinned: '/bin/systemctl restart myapp,/usr/sbin/nginx -s reload'. Every entry is linted at build time and the build fails on a route back to full root - a shell, an interpreter, a wildcard, an unpinned package manager, a firewall tool, a user-writable binary. This list becomes the trust boundary of the feature. See the README. | string | - |
 | sudoAllowUnsafe | Install the sudoCommands allowlist even when the lint rejects an entry. Off by default, and the build fails instead. Turn it on only after you have read each finding and decided it is wrong or acceptable - the findings are routes from an allowed command back to full root, not style notes. | boolean | false |
+
+## Upgrading from 2.x
+
+`blockGitAskpass` now defaults to `true`. In 2.x it shipped open, so a push from the editor
+authenticated with your host's GitHub token. Both credential channels are sealed in 3.0, so
+**`git push`, `pull` and `fetch` over HTTPS stop working** until the container has a credential of
+its own:
+
+- `gh auth login` inside the container, which writes a token to the container's own store.
+- Or a token in the container's git credential store, by whatever route you already use.
+- Or `"blockGitAskpass": false`, which puts 2.x behaviour back and the host token with it.
+
+Nothing else changed. Every other default, option name and script path is the same as 2.0.0.
 
 ## Upgrading from 1.x
 
@@ -35,7 +48,7 @@ sockets cannot be sealed without stopping the container from attaching. Three op
 | Was | Is now | Default |
 | --- | --- | --- |
 | `blockVscodeIpc` → `vscode-ipc-*.sock` | `blockCodeCli` | `false` |
-| `blockVscodeIpc` → `vscode-git-*.sock` | `blockGitAskpass` | `false` |
+| `blockVscodeIpc` → `vscode-git-*.sock` | `blockGitAskpass` | `true` |
 | `blockVscodeIpc` → `vscode-remote-containers-ipc-*.sock` | `blockExtensionIpc` | `true` |
 
 The CLI warns about an option it does not know, so a `devcontainer.json` that still sets
@@ -104,13 +117,13 @@ container, not assumed. The extension writes the list into `REMOTE_CONTAINERS_SO
 | GPG keyboxd | `~/.gnupg/S.keyboxd` | `blockGpgAgent` | blocked | your keyring |
 | X11 | `/tmp/.X11-unix/X<n>` | `blockX11` | blocked | your desktop: keystrokes, screenshots |
 | extension IPC | `vscode-remote-containers-ipc-<uuid>.sock` | `blockExtensionIpc` | blocked | RPC to the extension on your host, including every credential your host stores |
-| git credentials | `$XDG_RUNTIME_DIR/vscode-git-<id>.sock` | `blockGitAskpass` | **open** | your GitHub token, via `GIT_ASKPASS` |
+| git credentials | `$XDG_RUNTIME_DIR/vscode-git-<id>.sock` | `blockGitAskpass` | blocked | your GitHub token, via `GIT_ASKPASS` |
 | `code` CLI | `vscode-ipc-<uuid>.sock` | `blockCodeCli` | **open** | driving your editor, and opening a URI on your host desktop |
 | Wayland | `/tmp/vscode-wayland-<uuid>.sock` | none | open | your desktop — **a bind mount**, see below |
 
-This feature seals those sockets and removes the remote user's sudo grant, so the seals hold. Two
-of them ship open, and the next two sections say why, because in both cases the reason is about
-what VS Code needs rather than about what the channel costs you.
+This feature seals those sockets and removes the remote user's sudo grant, so the seals hold. One
+of them ships open, and the section on `vscode-ipc-*.sock` says why: the reason is about what VS
+Code needs to attach at all, not about what the channel costs you.
 
 ### The three IPC channels are not one channel
 
@@ -124,9 +137,11 @@ server CLI in `~/.vscode-server/bin/<commit>/out/server-cli.js`:
 | `vscode-git-*.sock` | yes, through the git extension | your host's GitHub token, for a host name the caller picks. VS Code prompts only for a host it has no session for | `git push`, `pull` and `fetch` over HTTPS, in the UI and in the terminal |
 | `vscode-remote-containers-ipc-*.sock` | yes, directly | an HTTP `POST` on it calls `rpc` on the extension **on your host**. Git uses it as `credential.helper`, so it answers for every host in your host's credential store, with no prompt | the host credential helper, and host docker registry logins |
 
-`blockExtensionIpc` is on by default because it is the broadest of the three, and because the
-narrower credential channel covers push and pull on its own. If you want no host credential
-reachable at all, set `blockGitAskpass` to `true` as well and authenticate some other way.
+`blockExtensionIpc` and `blockGitAskpass` are both on by default, so no host credential is
+reachable from the container. That costs push, pull and fetch over HTTPS, and the container needs a
+credential of its own to get them back - `gh auth login` inside it, or a token in its own git
+credential store. Set `blockGitAskpass` to `false` if you would rather keep the host token and push
+straight from the editor, which is what 2.x did.
 
 ### Why `vscode-ipc-*.sock` ships open
 
@@ -163,8 +178,9 @@ Error: connect EACCES /tmp/vscode-git-<id>.sock
 ```
 
 The first line is `credential.helper`, which VS Code writes into `/etc/gitconfig`. The second is
-`GIT_ASKPASS`. Either one alone is enough to authenticate a push, so the defaults open the
-narrower one and keep the broader one shut.
+`GIT_ASKPASS`. Either one alone is enough to authenticate a push, so closing only one of them
+leaves the host token reachable. That is why 3.0 closes both, and why the output above is what a
+push looks like on the defaults.
 
 ## What this actually buys you — read this first
 
@@ -296,7 +312,7 @@ sandbox: forwarded host channels in this container
   gpg agent        blocked
   x11 display      blocked
   code cli         not blocked (option is off)
-  git askpass      not blocked (option is off)
+  git askpass      blocked
   extension ipc    blocked
   sudo             dropped
   no-new-privs     not set -- add "securityOpt": ["no-new-privileges"] in devcontainer.json

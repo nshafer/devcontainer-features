@@ -46,9 +46,14 @@
       "moby": false
     },
 
-    // sandbox 2.x leaves the git askpass channel open, so a push from the editor authenticates
-    // again. gh is still here: it reads the release notes and the workflow runs, and it is the way
-    // back to a push for anyone who sets blockGitAskpass to true.
+    // sandbox 3.0 seals both credential channels by default, so no host credential reaches this
+    // container and a push over HTTPS fails with "Missing or invalid credentials". gh is how the
+    // container gets a credential of its own: run `gh auth login` in here once, and its token goes
+    // to the container's own store, which survives a rebuild through persist-homedir. gh also
+    // reads the release notes and the workflow runs.
+    //
+    // Set "blockGitAskpass": false on the sandbox feature above to go back to pushing with the
+    // host token instead. Nothing here depends on that choice.
     "ghcr.io/devcontainers/features/github-cli:1": {}
   },
 

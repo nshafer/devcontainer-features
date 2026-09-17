@@ -1,6 +1,6 @@
 {
   "id": "sandbox",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "name": "Sandbox (nshafer)",
   "description": "Seals the host sockets VS Code forwards into a dev container - SSH agent, GPG agent, X11 and the Dev Containers extension IPC - and takes away the remote user's blanket sudo grant so the seals cannot simply be undone. Mitigation, not a boundary: the socket must exist for the container to attach, so there is a short window at each attach. See the README.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/sandbox",
@@ -27,13 +27,13 @@
     },
     "blockGitAskpass": {
       "type": "boolean",
-      "default": false,
-      "description": "Block the git credential channel (vscode-git-*.sock, reached through GIT_ASKPASS). Off by default because blocking it stops git push, pull and fetch over HTTPS, in the VS Code UI and in the terminal. What it grants while open: the host's GitHub token, to anything in the container that connects to the socket. Turn it on if no host credential should be reachable, and authenticate some other way."
+      "default": true,
+      "description": "Block the git credential channel (vscode-git-*.sock, reached through GIT_ASKPASS). On by default, together with blockExtensionIpc, so no host credential is reachable from the container. The cost is real: git push, pull and fetch over HTTPS stop working, in the VS Code UI and in the terminal. Authenticate some other way - 'gh auth login' inside the container, or a token in the container's own credential store. Set it to false to get the host token back."
     },
     "blockExtensionIpc": {
       "type": "boolean",
       "default": true,
-      "description": "Block the Dev Containers extension channel (vscode-remote-containers-ipc-*.sock). An HTTP POST on it calls rpc on the extension running on your host, and git uses it as credential.helper - so it answers for every host in your host's credential store, with no prompt. Blocking it costs the host credential helper and host docker registry logins. Push and pull still work through blockGitAskpass."
+      "description": "Block the Dev Containers extension channel (vscode-remote-containers-ipc-*.sock). An HTTP POST on it calls rpc on the extension running on your host, and git uses it as credential.helper - so it answers for every host in your host's credential store, with no prompt. Blocking it costs the host credential helper and host docker registry logins. blockGitAskpass seals the other credential path, so both are shut by default and a push over HTTPS needs a credential of its own."
     },
     "scrubEnv": {
       "type": "boolean",

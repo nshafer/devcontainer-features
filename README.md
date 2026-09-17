@@ -30,7 +30,7 @@ Add to your `.devcontainer/devcontainer.json` (or `.devcontainer/devcontainer.lo
 
     "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {},
     "ghcr.io/nshafer/devcontainer-features/git-config:2": {},
-    "ghcr.io/nshafer/devcontainer-features/sandbox:2": {},
+    "ghcr.io/nshafer/devcontainer-features/sandbox:3": {},
     "ghcr.io/nshafer/devcontainer-features/egress-filter:2": { "presets": "debian,github,claude" },
     "ghcr.io/nshafer/devcontainer-features/claude:1": {},
     "ghcr.io/nshafer/devcontainer-features/tidewave:1": {}
@@ -226,7 +226,7 @@ everywhere. The standalone `devcontainer` CLI reads the config and nothing else,
 
     "ghcr.io/nshafer/devcontainer-features/persist-homedir:1": {},
     "ghcr.io/nshafer/devcontainer-features/git-config:2": {},
-    "ghcr.io/nshafer/devcontainer-features/sandbox:2": {},
+    "ghcr.io/nshafer/devcontainer-features/sandbox:3": {},
     "ghcr.io/nshafer/devcontainer-features/egress-filter:2": { "presets": "debian,github,claude" },
     "ghcr.io/nshafer/devcontainer-features/claude:1": {},
     "ghcr.io/nshafer/devcontainer-features/tidewave:1": {}
