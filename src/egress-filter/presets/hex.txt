@@ -4,3 +4,4 @@ repo.hex.pm
 hex.pm
 # Precompiled Erlang/Elixir builds, used by asdf and mise. Not verified.
 builds.hex.pm
+bob.hex.pm
