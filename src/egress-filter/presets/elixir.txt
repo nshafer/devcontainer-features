@@ -1,0 +1,7 @@
+# Elixir and Erlang documentation.
+# Package docs.
+.hexdocs.pm
+# The Elixir site.
+.elixir-lang.org
+# The Erlang/OTP site and docs.
+.erlang.org
