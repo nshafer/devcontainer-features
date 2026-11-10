@@ -15,7 +15,7 @@ Blocks all outbound network traffic from the container, except to the hosts on a
 
 | Options Id | Description | Type | Default Value |
 |-----|-----|-----|-----|
-| presets | Built-in host lists to allow, comma separated. Available: debian, ubuntu, alpine, npm, hex, elixir, go, python, rust, github, githubcopilot, gitlab, docker, claude. An unknown name gives a warning that lists the valid names. | string | - |
+| presets | Built-in host lists to allow, comma separated. Available: debian, ubuntu, alpine, npm, hex, elixir, go, python, rust, github, githubcopilot, gitlab, docker, claude, tidewave. An unknown name gives a warning that lists the valid names. | string | - |
 | allow | More hosts to allow, comma separated. A leading dot also allows the subdomains: '.github.com,pypi.org'. | string | - |
 | deny | Hosts to remove from the merged allowlist, comma separated. Applied last, so it overrides the global list, the project list, the presets and the baseline. | string | - |
 | baseline | Allow the hosts that VS Code itself needs: the marketplace, the extension CDNs and the update hosts. Without them, the server cannot install extensions, and the attach can hang. | boolean | true |
@@ -197,7 +197,7 @@ A preset is a small list of hosts for one ecosystem. Name the ecosystems instead
 ```
 
 The presets are `debian`, `ubuntu`, `alpine`, `npm`, `hex`, `elixir`, `go`, `python`, `rust`,
-`github`, `githubcopilot`, `gitlab`, `docker` and `claude`. Each one is a commented file in
+`github`, `githubcopilot`, `gitlab`, `docker`, `claude` and `tidewave`. Each one is a commented file in
 [`src/egress-filter/presets/`](presets). The comments say which entries come from a real image or
 client, and which are a first guess. An unknown name gives a warning that lists the valid names.
 
