@@ -1,6 +1,6 @@
 {
   "id": "egress-filter",
-  "version": "2.6.0",
+  "version": "2.7.0",
   "name": "Egress filter (nshafer)",
   "description": "Blocks all outbound network traffic from the container, except to the hosts on an allowlist. A firewall in the container enforces control, so a program that ignores HTTP_PROXY cannot connect either. A proxy enforces policy, so the lists hold host names and there is no TLS interception. The allowlist merges a global list on your host, a list in the repository, the options here, and a baseline that keeps VS Code working. Containers that an inner Docker daemon starts are filtered too.",
   "documentationURL": "https://github.com/nshafer/devcontainer-features/tree/main/src/egress-filter",
@@ -14,7 +14,7 @@
         "debian,hex,github",
         "debian,npm,python,github,claude"
       ],
-      "description": "Built-in host lists to allow, comma separated. Available: debian, ubuntu, alpine, npm, hex, elixir, go, python, rust, github, githubcopilot, gitlab, docker, claude. An unknown name gives a warning that lists the valid names."
+      "description": "Built-in host lists to allow, comma separated. Available: debian, ubuntu, alpine, npm, hex, elixir, go, python, rust, github, githubcopilot, gitlab, docker, claude, tidewave. An unknown name gives a warning that lists the valid names."
     },
     "allow": {
       "type": "string",

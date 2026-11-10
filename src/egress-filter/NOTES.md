@@ -168,7 +168,7 @@ A preset is a small list of hosts for one ecosystem. Name the ecosystems instead
 ```
 
 The presets are `debian`, `ubuntu`, `alpine`, `npm`, `hex`, `elixir`, `go`, `python`, `rust`,
-`github`, `githubcopilot`, `gitlab`, `docker` and `claude`. Each one is a commented file in
+`github`, `githubcopilot`, `gitlab`, `docker`, `claude` and `tidewave`. Each one is a commented file in
 [`src/egress-filter/presets/`](presets). The comments say which entries come from a real image or
 client, and which are a first guess. An unknown name gives a warning that lists the valid names.
 

@@ -1,0 +1,11 @@
+# Tidewave. Taken from the CLI source and the client bundle that tidewave.ai serves.
+# The CLI proxies its /tidewave routes to the client app on tidewave.ai.
+.tidewave.ai
+# The client tells the CLI to download Bun from GitHub releases.
+# The release URL redirects to release-assets.githubusercontent.com.
+github.com
+.githubusercontent.com
+# Bun runs each agent adapter with `bun x`, from the npm registry.
+# The Copilot CLI download is an npm tarball too.
+registry.npmjs.org
+# The agents call their own APIs. Add the claude or githubcopilot preset for those.
